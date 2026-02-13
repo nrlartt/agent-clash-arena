@@ -209,28 +209,35 @@ app.get('/api/v1/arena/recent-results', (_req, res) => {
 // ── Sentry Error Handler ─────────────────────────────────────
 setupSentryErrorHandler(app);
 
-// ── Serve Frontend (Production) ──────────────────────────────
-if (IS_PRODUCTION) {
-    const distPath = path.join(__dirname, '..', 'dist');
+// ── Serve Frontend ──────────────────────────────────────────
+const fs = require('fs');
+const distPath = path.join(__dirname, '..', 'dist');
+const distExists = fs.existsSync(path.join(distPath, 'index.html'));
+
+if (distExists) {
+    logger.info(`Serving frontend from ${distPath}`);
     app.use(express.static(distPath));
     // SPA fallback — serve index.html for all non-API routes
     app.get('*', (req, res) => {
-        // Don't serve index.html for API routes
         if (req.path.startsWith('/api/')) {
             return res.status(404).json({
                 success: false,
-                error: 'Endpoint not found',
+                error: 'API endpoint not found',
                 docs: 'GET /skill.md for full API documentation',
             });
         }
         res.sendFile(path.join(distPath, 'index.html'));
     });
 } else {
-    // ── 404 (Development) ─────────────────────────────────────
+    logger.warn(`Frontend dist/ not found at ${distPath}. Running in API-only mode.`);
+    // 404 for non-API routes
     app.use((_req, res) => {
         res.status(404).json({
             success: false,
-            error: 'Endpoint not found',
+            error: 'Endpoint not found. Frontend not built.',
+            hint: IS_PRODUCTION
+                ? 'dist/ folder is missing. Check Docker build logs.'
+                : 'Run "npm run build" first, or use "npm run dev" for development.',
             docs: 'GET /skill.md for full API documentation',
         });
     });
