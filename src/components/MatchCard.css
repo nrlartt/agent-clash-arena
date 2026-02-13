@@ -1,0 +1,114 @@
+/* ── Match Card ────────────────────────────────────────────────── */
+.match-card {
+    padding: var(--space-lg);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    transition: all var(--transition-base);
+}
+
+.match-card--live {
+    border-color: rgba(255, 49, 49, 0.2);
+    animation: glow-ring 3s ease-in-out infinite;
+}
+
+.match-card__status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.match-card__viewers,
+.match-card__timer {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+/* Fighters */
+.match-card__fighters {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.match-card__fighter {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.match-card__avatar {
+    width: 56px;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 2px solid;
+    font-size: 1.6rem;
+    background: var(--bg-secondary);
+    transition: all var(--transition-base);
+}
+
+.match-card:hover .match-card__avatar {
+    transform: scale(1.1);
+}
+
+.match-card__name {
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.match-card__odds {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--neon-green);
+}
+
+.match-card__vs {
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    font-weight: 900;
+    color: var(--neon-yellow);
+    text-shadow: 0 0 10px rgba(255, 233, 62, 0.5);
+    flex-shrink: 0;
+}
+
+/* Footer */
+.match-card__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: var(--space-sm);
+    border-top: 1px solid var(--border-subtle);
+}
+
+.match-card__pool {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--monad-purple-light);
+}
+
+.match-card__time {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--neon-yellow);
+}

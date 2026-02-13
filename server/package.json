@@ -1,0 +1,23 @@
+{
+    "name": "agent-clash-arena-server",
+    "version": "1.0.0",
+    "description": "Agent Clash Arena — Backend API & WebSocket Server",
+    "main": "index.js",
+    "scripts": {
+        "start": "NODE_ENV=production node index.js",
+        "dev": "node --watch index.js"
+    },
+    "dependencies": {
+        "@sentry/node": "^10.38.0",
+        "cors": "^2.8.5",
+        "dotenv": "^17.3.1",
+        "ethers": "^6.16.0",
+        "express": "^4.21.0",
+        "express-rate-limit": "^8.2.1",
+        "helmet": "^8.1.0",
+        "mongoose": "^9.2.1",
+        "socket.io": "^4.7.5",
+        "uuid": "^9.0.1",
+        "winston": "^3.19.0"
+    }
+}

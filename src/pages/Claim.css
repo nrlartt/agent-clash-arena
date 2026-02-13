@@ -1,0 +1,542 @@
+/* ═══ Claim Page ═══════════════════════════════════════════════ */
+.claim-page {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 80vh;
+    padding: 2rem;
+}
+
+.claim-card {
+    padding: 40px;
+    margin: 0 auto;
+    max-width: 620px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1.5rem;
+    text-align: left;
+}
+
+.claim-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.claim-muted {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.claim-error-text {
+    color: var(--neon-red);
+    font-size: 0.95rem;
+    padding: 12px 16px;
+    background: rgba(255, 45, 120, 0.08);
+    border: 1px solid rgba(255, 45, 120, 0.2);
+    border-radius: var(--radius-md);
+    width: 100%;
+    text-align: center;
+}
+
+/* ── Header ─────────────────────────────────────────────────── */
+.claim-header {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    width: 100%;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.claim-icon {
+    width: 64px;
+    height: 64px;
+    background: var(--gradient-primary);
+    border-radius: 16px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    flex-shrink: 0;
+    box-shadow: var(--shadow-glow-purple);
+}
+
+.claim-header h1 {
+    font-size: 1.6rem;
+    margin-bottom: 0.4rem;
+    color: white;
+}
+
+.claim-header p {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+/* ── Claim Token Display ─────────────────────────────────────── */
+.claim-token-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    font-size: 0.8rem;
+}
+
+.claim-token-label {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.claim-token-value {
+    flex: 1;
+    font-family: var(--font-mono);
+    color: var(--monad-purple-light);
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.claim-token-display {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    word-break: break-all;
+}
+
+.claim-copy-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.claim-copy-btn:hover {
+    background: var(--bg-secondary);
+    border-color: var(--monad-purple);
+    color: var(--monad-purple-light);
+}
+
+/* ── Agent Preview ───────────────────────────────────────────── */
+.agent-preview {
+    width: 100%;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+    border: 1px solid var(--border-subtle);
+}
+
+.agent-preview__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.agent-name {
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    color: var(--neon-cyan);
+    font-weight: 700;
+}
+
+.agent-status-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    background: rgba(255, 233, 62, 0.1);
+    color: var(--neon-yellow);
+    border: 1px solid rgba(255, 233, 62, 0.3);
+}
+
+.agent-desc {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 0.8rem;
+    line-height: 1.4;
+}
+
+.agent-tags {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.tag {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: capitalize;
+}
+
+/* ── Claim Actions ───────────────────────────────────────────── */
+.claim-actions {
+    width: 100%;
+}
+
+.connect-prompt {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 2rem;
+    background: rgba(255, 233, 62, 0.04);
+    border: 1px dashed rgba(255, 233, 62, 0.25);
+    border-radius: var(--radius-md);
+    text-align: center;
+}
+
+.connect-prompt p {
+    color: var(--neon-yellow);
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.connect-sub {
+    color: var(--text-muted) !important;
+    font-weight: 400 !important;
+    font-size: 0.78rem !important;
+}
+
+/* ── Connected Info Bar ──────────────────────────────────────── */
+.connected-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: rgba(57, 255, 20, 0.06);
+    border: 1px solid rgba(57, 255, 20, 0.2);
+    border-radius: var(--radius-md);
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.connected-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--neon-green);
+    box-shadow: 0 0 6px var(--neon-green);
+    flex-shrink: 0;
+}
+
+.network-badge {
+    margin-left: auto;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(131, 110, 249, 0.15);
+    color: var(--monad-purple-light);
+}
+
+/* ── Form Groups ─────────────────────────────────────────────── */
+.allowance-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    width: 100%;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.form-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.form-optional {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+/* ── Twitter Input ───────────────────────────────────────────── */
+.twitter-input-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.twitter-at {
+    position: absolute;
+    left: 14px;
+    color: var(--text-muted);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.twitter-input-group .input-field {
+    padding-left: 32px;
+}
+
+/* ── Budget Input ────────────────────────────────────────────── */
+.budget-input-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.budget-input-group input,
+.twitter-input-group input {
+    width: 100%;
+    padding: 14px 16px;
+    padding-right: 60px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: white;
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.budget-input-group input:focus,
+.twitter-input-group input:focus {
+    border-color: var(--monad-purple);
+    box-shadow: 0 0 0 2px rgba(131, 110, 249, 0.2);
+}
+
+.currency-label {
+    position: absolute;
+    right: 16px;
+    color: var(--monad-purple-light);
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+/* ── Budget Presets ──────────────────────────────────────────── */
+.budget-presets {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.budget-preset-btn {
+    flex: 1;
+    padding: 6px 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.budget-preset-btn:hover {
+    border-color: var(--monad-purple);
+    color: var(--monad-purple-light);
+}
+
+.budget-preset-btn.active {
+    background: rgba(131, 110, 249, 0.15);
+    border-color: var(--monad-purple);
+    color: var(--monad-purple-light);
+    font-weight: 600;
+}
+
+/* ── Form Hint ───────────────────────────────────────────────── */
+.form-hint {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.02);
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+}
+
+/* ── Info Box ────────────────────────────────────────────────── */
+.claim-info-box {
+    padding: 14px 16px;
+    background: rgba(131, 110, 249, 0.05);
+    border: 1px solid rgba(131, 110, 249, 0.15);
+    border-radius: var(--radius-md);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.claim-info-box p {
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.claim-info-box ul {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.claim-info-box li {
+    line-height: 1.5;
+}
+
+/* ── Button Row ──────────────────────────────────────────────── */
+.claim-btn-row {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+}
+
+.claim-btn-row .btn {
+    flex: 1;
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--border-medium);
+    color: var(--text-secondary);
+    padding: 10px 20px;
+    border-radius: var(--radius-md);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-outline:hover {
+    border-color: var(--monad-purple);
+    color: var(--monad-purple-light);
+}
+
+/* ── Success Card ────────────────────────────────────────────── */
+.success-card {
+    text-align: center;
+    align-items: center;
+    padding: 2.5rem;
+}
+
+.success-card h1 {
+    margin-top: 0.8rem;
+    color: var(--neon-green);
+}
+
+.success-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 1.2rem;
+    background: rgba(57, 255, 20, 0.06);
+    border: 1px solid rgba(57, 255, 20, 0.2);
+    border-radius: var(--radius-md);
+}
+
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.88rem;
+    color: var(--text-primary);
+}
+
+.mono {
+    font-family: var(--font-mono);
+}
+
+.success-info {
+    width: 100%;
+    text-align: left;
+    padding: 14px 16px;
+    background: rgba(131, 110, 249, 0.05);
+    border-radius: var(--radius-md);
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.success-info p {
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.success-info ul {
+    padding-left: 18px;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sub-text {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+    width: 100%;
+}
+
+/* ── Full Width Button ───────────────────────────────────────── */
+.btn-full {
+    width: 100%;
+    justify-content: center;
+}
+
+.btn-lg {
+    padding: 14px 24px;
+    font-size: 1rem;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+    .claim-card {
+        padding: 24px;
+    }
+    
+    .claim-header {
+        flex-direction: column;
+        text-align: center;
+        gap: 1rem;
+    }
+    
+    .claim-header h1 {
+        font-size: 1.3rem;
+    }
+    
+    .budget-presets {
+        flex-wrap: wrap;
+    }
+    
+    .claim-btn-row {
+        flex-direction: column;
+    }
+}

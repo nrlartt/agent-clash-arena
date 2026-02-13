@@ -1,0 +1,627 @@
+/* ═══════════════════════════════════════════════════════════════
+   BET PANEL v2 — Boxing Match Betting
+   ═══════════════════════════════════════════════════════════════ */
+
+.bet-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    background: linear-gradient(165deg, rgba(20, 16, 36, 0.95) 0%, rgba(10, 8, 20, 0.98) 100%);
+    border: 1px solid rgba(131, 110, 249, 0.15);
+    backdrop-filter: blur(16px);
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+        0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Subtle ring light effect at top */
+.bet-panel::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #FF2D78, #836EF9, #00F5FF);
+    opacity: 0.6;
+}
+
+.bet-panel--disabled {
+    filter: saturate(0.4);
+}
+
+/* ── Overlay ── */
+.bet-panel__overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(5, 3, 12, 0.85);
+    backdrop-filter: blur(6px);
+    z-index: 10;
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.bet-panel__overlay h3 {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.7);
+    margin: 0;
+}
+
+.bet-panel__overlay p {
+    font-size: 0.8rem;
+    margin: 0;
+}
+
+/* ── Header ── */
+.bet-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.bet-panel__title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bet-panel__icon-box {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(255, 45, 120, 0.15), rgba(131, 110, 249, 0.15));
+    border: 1px solid rgba(255, 45, 120, 0.2);
+}
+
+.bet-panel__title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: #fff;
+    margin: 0;
+}
+
+.bet-panel__subtitle {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.35);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+/* ── Timer ── */
+.bet-panel__timer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 14px;
+    border-radius: 10px;
+    background: rgba(131, 110, 249, 0.08);
+    border: 1px solid rgba(131, 110, 249, 0.2);
+    min-width: 62px;
+    transition: all 0.3s ease;
+}
+
+.bet-panel__timer-label {
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: rgba(255, 255, 255, 0.4);
+    text-transform: uppercase;
+}
+
+.bet-panel__timer-value {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: #fff;
+}
+
+.bet-panel__timer.urgent {
+    background: rgba(255, 229, 62, 0.1);
+    border-color: rgba(255, 229, 62, 0.3);
+    animation: timerPulse 1s ease infinite;
+}
+
+.bet-panel__timer.urgent .bet-panel__timer-value {
+    color: #FFE93E;
+}
+
+.bet-panel__timer.critical {
+    background: rgba(255, 45, 120, 0.12);
+    border-color: rgba(255, 45, 120, 0.4);
+    animation: timerPulse 0.5s ease infinite;
+}
+
+.bet-panel__timer.critical .bet-panel__timer-value {
+    color: #FF2D78;
+}
+
+@keyframes timerPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); box-shadow: 0 0 12px rgba(255, 45, 120, 0.3); }
+}
+
+/* ── Pool Distribution ── */
+.bet-panel__pool {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.bet-panel__pool-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.68rem;
+    font-weight: 700;
+}
+
+.bet-panel__pool-name {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 0.6rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.bet-panel__pool-total {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: monospace;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.4);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 2px 8px;
+    border-radius: 6px;
+}
+
+.bet-panel__pool-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bet-panel__pct {
+    font-family: monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    min-width: 34px;
+    text-align: center;
+}
+
+.bet-panel__pool-bar {
+    flex: 1;
+    height: 8px;
+    border-radius: 100px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.04);
+    display: flex;
+    position: relative;
+}
+
+.bet-panel__pool-fill {
+    height: 100%;
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    background: var(--fill-color);
+}
+
+.bet-panel__pool-fill--left {
+    border-radius: 100px 0 0 100px;
+    background: linear-gradient(90deg, var(--fill-color), color-mix(in srgb, var(--fill-color) 60%, transparent));
+}
+
+.bet-panel__pool-fill--right {
+    border-radius: 0 100px 100px 0;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--fill-color) 60%, transparent), var(--fill-color));
+}
+
+.bet-panel__pool-divider {
+    width: 2px;
+    background: rgba(255, 255, 255, 0.2);
+    flex-shrink: 0;
+}
+
+/* ── Fighter Selection ── */
+.bet-panel__fighters {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bet-panel__fighter {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 8px;
+    border-radius: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+    cursor: pointer;
+    transition: all 0.25s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.bet-panel__fighter:hover:not(:disabled) {
+    border-color: var(--fighter-color);
+    background: color-mix(in srgb, var(--fighter-color) 6%, transparent);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px color-mix(in srgb, var(--fighter-color) 20%, transparent);
+}
+
+.bet-panel__fighter.selected {
+    border-color: var(--fighter-color);
+    background: linear-gradient(180deg,
+        color-mix(in srgb, var(--fighter-color) 12%, transparent) 0%,
+        color-mix(in srgb, var(--fighter-color) 4%, transparent) 100%);
+    box-shadow:
+        0 0 20px color-mix(in srgb, var(--fighter-color) 20%, transparent),
+        inset 0 1px 0 color-mix(in srgb, var(--fighter-color) 15%, transparent);
+}
+
+.bet-panel__fighter-corner {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.5rem;
+    font-weight: 800;
+    letter-spacing: 0.2em;
+    padding: 2px 0;
+    background: color-mix(in srgb, var(--fighter-color) 20%, transparent);
+    color: var(--fighter-color);
+    opacity: 0.7;
+}
+
+.bet-panel__fighter-avatar {
+    font-size: 2rem;
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
+    margin-top: 10px;
+    transition: transform 0.2s ease;
+}
+
+.bet-panel__fighter.selected .bet-panel__fighter-avatar {
+    transform: scale(1.15);
+}
+
+.bet-panel__fighter-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #fff;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    letter-spacing: 0.05em;
+}
+
+.bet-panel__fighter-odds {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-family: monospace;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #39FF14;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 3px 8px;
+    border-radius: 6px;
+}
+
+.bet-panel__fighter-check {
+    position: absolute;
+    top: 10px;
+    right: 8px;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--fighter-color);
+    color: #000;
+    font-size: 0.65rem;
+    font-weight: 900;
+    animation: popIn 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes popIn {
+    0% { transform: scale(0); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+/* VS Badge */
+.bet-panel__vs {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(255, 45, 120, 0.2), rgba(131, 110, 249, 0.2));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    flex-shrink: 0;
+}
+
+.bet-panel__vs span {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.55rem;
+    font-weight: 900;
+    color: rgba(255, 255, 255, 0.6);
+    letter-spacing: 0.1em;
+}
+
+/* ── Amount Input ── */
+.bet-panel__amount-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.bet-panel__label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.4);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.bet-panel__input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.bet-panel__input-currency {
+    position: absolute;
+    left: 12px;
+    font-family: 'Orbitron', monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: rgba(131, 110, 249, 0.6);
+    pointer-events: none;
+}
+
+.bet-panel__input {
+    width: 100%;
+    padding: 12px 14px 12px 46px;
+    font-family: monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(131, 110, 249, 0.15);
+    border-radius: 10px;
+    outline: none;
+    transition: all 0.25s ease;
+}
+
+.bet-panel__input:focus {
+    border-color: rgba(131, 110, 249, 0.4);
+    box-shadow: 0 0 0 3px rgba(131, 110, 249, 0.08);
+}
+
+.bet-panel__input::placeholder {
+    color: rgba(255, 255, 255, 0.15);
+}
+
+.bet-panel__quick-amounts {
+    display: flex;
+    gap: 6px;
+}
+
+.bet-panel__quick-btn {
+    flex: 1;
+    padding: 7px 4px;
+    font-family: monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.bet-panel__quick-btn:hover:not(:disabled) {
+    color: #836EF9;
+    border-color: rgba(131, 110, 249, 0.3);
+    background: rgba(131, 110, 249, 0.06);
+}
+
+.bet-panel__quick-btn.active {
+    color: #fff;
+    border-color: rgba(131, 110, 249, 0.5);
+    background: rgba(131, 110, 249, 0.12);
+    box-shadow: 0 0 8px rgba(131, 110, 249, 0.15);
+}
+
+/* ── Win Preview ── */
+.bet-panel__win-preview {
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 0 12px;
+}
+
+.bet-panel__win-preview.visible {
+    max-height: 80px;
+    opacity: 1;
+    padding: 12px;
+    background: linear-gradient(135deg, rgba(255, 229, 62, 0.06), rgba(131, 110, 249, 0.04));
+    border: 1px solid rgba(255, 229, 62, 0.1);
+    border-radius: 10px;
+}
+
+.bet-panel__win-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.bet-panel__win-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.bet-panel__win-value {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.1rem;
+    font-weight: 800;
+    background: linear-gradient(90deg, #FFE93E, #FF9F43);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.bet-panel__win-multiplier {
+    font-size: 0.6rem;
+    color: rgba(255, 255, 255, 0.3);
+    text-align: right;
+    margin-top: 2px;
+}
+
+/* ── Submit Button ── */
+.bet-panel__submit {
+    width: 100%;
+    padding: 14px 20px;
+    border-radius: 12px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: linear-gradient(135deg, rgba(131, 110, 249, 0.3), rgba(131, 110, 249, 0.15));
+    color: rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(131, 110, 249, 0.2);
+}
+
+.bet-panel__submit.ready {
+    background: linear-gradient(135deg, #FF2D78, #836EF9);
+    color: #fff;
+    box-shadow:
+        0 4px 20px rgba(255, 45, 120, 0.3),
+        0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+}
+
+.bet-panel__submit.ready:hover {
+    transform: translateY(-2px);
+    box-shadow:
+        0 8px 30px rgba(255, 45, 120, 0.4),
+        0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+}
+
+.bet-panel__submit.ready:active {
+    transform: translateY(0);
+}
+
+.bet-panel__submit.loading {
+    background: linear-gradient(90deg, #836EF9, #FF2D78, #836EF9);
+    background-size: 200% 100%;
+    animation: shimmerBtn 1.5s ease infinite;
+    pointer-events: none;
+}
+
+@keyframes shimmerBtn {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.bet-panel__submit:disabled:not(.loading) {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.bet-panel__submit--connect {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px dashed rgba(255, 255, 255, 0.15);
+    color: rgba(255, 255, 255, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.bet-panel__submit-content,
+.bet-panel__submit-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Disclaimer ── */
+.bet-panel__disclaimer {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.6rem;
+    color: rgba(255, 255, 255, 0.2);
+}
+
+/* ── Responsive ── */
+@media (max-width: 400px) {
+    .bet-panel {
+        padding: 14px;
+        gap: 10px;
+    }
+    .bet-panel__fighter-avatar {
+        font-size: 1.5rem;
+    }
+    .bet-panel__fighter-name {
+        font-size: 0.6rem;
+    }
+}

@@ -1,0 +1,32 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: agent-clash-arena
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      - key: MONGODB_URI
+        sync: false  # Set manually in Render dashboard
+      - key: CIRCLE_API_KEY
+        sync: false
+      - key: VITE_CIRCLE_APP_ID
+        sync: false
+      - key: VITE_GOOGLE_CLIENT_ID
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+
+databases:
+  - name: agent-clash-db
+    plan: starter
+    databaseName: agentclash
+    ipAllowList: []  # Only internal access

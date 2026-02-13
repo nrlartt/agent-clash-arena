@@ -1,0 +1,39 @@
+{
+  "name": "agent-clash-arena",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "cd server && node --watch index.js",
+    "dev:full": "concurrently \"npm run dev\" \"npm run dev:server\"",
+    "build": "vite build",
+    "start": "cd server && node index.js",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@circle-fin/w3s-pw-web-sdk": "^1.1.11",
+    "@sentry/react": "^10.38.0",
+    "ethers": "^6.16.0",
+    "framer-motion": "^12.34.0",
+    "lucide-react": "^0.563.0",
+    "matter-js": "^0.20.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.13.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "solc": "^0.8.24",
+    "vite": "^7.3.1"
+  }
+}

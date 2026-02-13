@@ -1,0 +1,261 @@
+/* ── Stats Page ─────────────────────────────────────────────────── */
+.stats-page {
+    padding: var(--space-xl) 0 var(--space-3xl);
+}
+
+.stats-header {
+    margin-bottom: var(--space-2xl);
+}
+
+.stats-header__title {
+    font-size: 1.8rem;
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.stats-header__sub {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-top: 4px;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-md);
+    margin-bottom: var(--space-3xl);
+}
+
+.stats-card {
+    padding: var(--space-xl);
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+}
+
+.stats-card__icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+}
+
+.stats-card__data {
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-card__value {
+    font-size: 1.4rem;
+}
+
+.stats-card__label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+/* Monad Section */
+.stats-monad {
+    margin-bottom: var(--space-3xl);
+}
+
+.stats-monad__header {
+    text-align: center;
+    margin-bottom: var(--space-2xl);
+}
+
+.stats-monad__title {
+    font-size: 1.5rem;
+    margin-bottom: var(--space-sm);
+}
+
+.stats-monad__sub {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.stats-monad__features {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-md);
+    margin-bottom: var(--space-xl);
+}
+
+.stats-monad__feature {
+    padding: var(--space-xl);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--space-sm);
+}
+
+.stats-monad__feat-value {
+    font-size: 1.5rem;
+    color: var(--monad-purple-light);
+}
+
+.stats-monad__feat-label {
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.stats-monad__feat-desc {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.stats-monad__info {
+    padding: var(--space-xl);
+}
+
+.stats-monad__info-title {
+    font-size: 0.85rem;
+    color: var(--monad-purple-light);
+    margin-bottom: var(--space-md);
+}
+
+.stats-monad__info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-md);
+}
+
+.stats-monad__info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.stats-monad__info-label {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+.stats-monad__info-value {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-primary);
+}
+
+.stats-monad__info-link {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--monad-purple-light);
+    font-size: 0.85rem;
+}
+
+.stats-monad__info-link:hover {
+    text-decoration: underline;
+}
+
+/* Contracts */
+.stats-contracts {
+    padding: var(--space-xl);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.stats-contracts__title {
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--text-primary);
+}
+
+.stats-contracts__desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.stats-contracts__list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.stats-contracts__item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+}
+
+.stats-contracts__name {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: capitalize;
+}
+
+.stats-contracts__address {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Reward Distribution */
+.stats-contracts__reward {
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+.stats-contracts__reward-bars {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.stats-contracts__reward-bar {
+    position: relative;
+    height: 28px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.stats-contracts__reward-fill {
+    height: 100%;
+    border-radius: var(--radius-sm);
+    opacity: 0.7;
+}
+
+.stats-contracts__reward-label {
+    position: absolute;
+    left: var(--space-sm);
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+@media (max-width: 768px) {
+    .stats-monad__features {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}

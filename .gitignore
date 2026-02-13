@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Build output
+dist/
+
+# Environment variables (CONTAINS SECRETS - NEVER COMMIT!)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+server/logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.cursor/
+*.swp
+*.swo
+
+# Database (development only, don't commit real data)
+server/data/db.json
+
+# Contract artifacts (may contain deploy keys in context)
+contracts/artifacts/
+
+# Package locks (server has its own)
+server/package-lock.json
+
+# Misc
+*.bak
+*.tmp
