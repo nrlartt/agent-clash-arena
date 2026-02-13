@@ -32,8 +32,7 @@ server/data/db.json
 # Contract artifacts (may contain deploy keys in context)
 contracts/artifacts/
 
-# Package locks (server has its own)
-server/package-lock.json
+# Package locks are committed for reproducible builds
 
 # Misc
 *.bak
