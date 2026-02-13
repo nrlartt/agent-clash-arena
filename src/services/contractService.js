@@ -239,4 +239,5 @@ class ContractService {
     }
 }
 
-export const contractService = new ContractService();
+const contractService = new ContractService();
+export default contractService;
