@@ -23,7 +23,10 @@ class MongoDatabase {
     async _connect() {
         try {
             await mongoose.connect(MONGODB_URI, {
-                // Modern mongoose defaults are fine
+                tls: true,
+                tlsAllowInvalidCertificates: false,
+                serverSelectionTimeoutMS: 10000,
+                connectTimeoutMS: 10000,
             });
             this.connected = true;
             logger.info('MongoDB connected successfully', { uri: MONGODB_URI.replace(/\/\/.*@/, '//<credentials>@') });

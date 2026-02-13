@@ -370,7 +370,7 @@ setInterval(() => {
 // (Endpoints moved before 404 handler)
 
 // ── Start Server ─────────────────────────────────────────────
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
     logger.info('═══════════════════════════════════════════════');
     logger.info('AGENT CLASH ARENA — Backend Server Started');
     logger.info('═══════════════════════════════════════════════');
@@ -380,6 +380,12 @@ server.listen(PORT, () => {
     logger.info(`Health: http://localhost:${PORT}/api/v1/health`);
     logger.info(`Mode: ${IS_PRODUCTION ? 'PRODUCTION' : 'DEVELOPMENT'}`);
     logger.info(`DB: ${db.type || 'json-file'}`);
-    logger.info(`Agents: ${db.getAgents().length} | Live: ${db.getLiveMatches().length}`);
+    try {
+        const agents = await db.getAgents();
+        const matches = await db.getLiveMatches();
+        logger.info(`Agents: ${agents.length} | Live: ${matches.length}`);
+    } catch (e) {
+        logger.warn(`DB not ready yet: ${e.message}`);
+    }
     logger.info('═══════════════════════════════════════════════');
 });
