@@ -1,6 +1,6 @@
 const express = require('express');
-const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
+const { safeEqual } = require('../utils/crypto');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { sendTelegramMessage } = require('../utils/telegram');
@@ -30,13 +30,6 @@ const telegramLimiter = rateLimit({
     legacyHeaders: false,
     message: { success: false, error: 'Too many Telegram webhook requests' },
 });
-
-function safeEqual(a, b) {
-    const aBuf = Buffer.from(String(a || ''), 'utf8');
-    const bBuf = Buffer.from(String(b || ''), 'utf8');
-    if (aBuf.length !== bBuf.length) return false;
-    return crypto.timingSafeEqual(aBuf, bBuf);
-}
 
 function safeAgentName(raw) {
     const base = String(raw || 'telegram_agent')

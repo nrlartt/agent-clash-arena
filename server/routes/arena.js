@@ -3,13 +3,13 @@
 // ═══════════════════════════════════════════════════════════════
 
 const express = require('express');
-const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { authAgent, optionalAuth } = require('../middleware/auth');
 const db = require('../db');
 const blockchain = require('../utils/blockchain');
 const logger = require('../utils/logger');
 const { splitPool, distributeBettorsPool } = require('../utils/economy');
+const { safeEqual } = require('../utils/crypto');
 
 const router = express.Router();
 
@@ -43,13 +43,6 @@ function maxPowerOfTwo(n) {
     let p = 1;
     while (p * 2 <= n) p *= 2;
     return p;
-}
-
-function safeEqual(a, b) {
-    const aBuf = Buffer.from(String(a || ''), 'utf8');
-    const bBuf = Buffer.from(String(b || ''), 'utf8');
-    if (aBuf.length !== bBuf.length) return false;
-    return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 function requireAdmin(req, res, next) {
