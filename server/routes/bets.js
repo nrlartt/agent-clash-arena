@@ -34,6 +34,13 @@ router.post('/', (req, res) => {
         });
     }
 
+    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet_address)) {
+        return res.status(400).json({
+            success: false,
+            error: 'Invalid wallet address format',
+        });
+    }
+
     const match = db.getMatchById(match_id);
     if (!match) {
         return res.status(404).json({
@@ -57,6 +64,18 @@ router.post('/', (req, res) => {
         });
     }
 
+    // One bet per wallet per match
+    const existingBet = db.getBetsForMatch(match_id).find(
+        b => String(b.walletAddress || '').toLowerCase() === wallet_address.toLowerCase()
+    );
+    if (existingBet) {
+        return res.status(409).json({
+            success: false,
+            error: 'This wallet already placed a bet for this match',
+            existing_bet_id: existingBet.id,
+        });
+    }
+
     // Create bet
     const bet = {
         id: `bet-${uuidv4().slice(0, 8)}`,
@@ -66,7 +85,10 @@ router.post('/', (req, res) => {
         amount: betAmount,
         odds: agent_id === match.agent1Id ? match.agent1Odds : match.agent2Odds,
         potentialWin: betAmount * (agent_id === match.agent1Id ? match.agent1Odds : match.agent2Odds),
-        status: 'active',
+        status: 'pending',
+        payout: 0,
+        resolvedAt: null,
+        claimedAt: null,
         placedAt: Date.now(),
     };
 
@@ -119,6 +141,22 @@ router.post('/', (req, res) => {
         },
         message: `Bet placed! Potential win: ${bet.potentialWin.toFixed(2)} MON`,
     });
+});
+
+// ── GET /bets/wallet/:walletAddress — User bet history ────────
+router.get('/wallet/:walletAddress', (req, res) => {
+    const walletAddress = req.params.walletAddress;
+    if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+        return res.status(400).json({ success: false, error: 'Invalid wallet address format' });
+    }
+
+    if (typeof db.getBetsByWallet !== 'function') {
+        return res.status(501).json({ success: false, error: 'Wallet bet history is unavailable in this DB mode' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const data = db.getBetsByWallet(walletAddress, limit);
+    return res.json({ success: true, data, count: data.length });
 });
 
 // ── GET /bets/:matchId — Get bets for a match (public) ───────

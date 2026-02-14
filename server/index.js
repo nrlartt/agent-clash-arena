@@ -22,16 +22,43 @@ const server = createServer(app);
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-const ALLOWED_ORIGINS = IS_PRODUCTION
-    ? [process.env.FRONTEND_URL || '*'].filter(Boolean)
-    : [
-        'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175',
-        'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:5174',
-    ];
+if (IS_PRODUCTION) {
+    // Required for correct client IP and rate limit behavior behind reverse proxies
+    app.set('trust proxy', 1);
+}
+
+function parseOrigins(...rawValues) {
+    return [...new Set(
+        rawValues
+            .filter(Boolean)
+            .flatMap(v => String(v).split(','))
+            .map(v => v.trim())
+            .filter(Boolean)
+    )];
+}
+
+const DEV_ALLOWED_ORIGINS = [
+    'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175',
+    'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:5174',
+];
+
+const PROD_ALLOWED_ORIGINS = parseOrigins(process.env.FRONTEND_URL, process.env.ALLOWED_ORIGINS);
+const ALLOWED_ORIGINS = IS_PRODUCTION ? PROD_ALLOWED_ORIGINS : DEV_ALLOWED_ORIGINS;
+
+if (IS_PRODUCTION && ALLOWED_ORIGINS.length === 0) {
+    logger.warn('No allowed origins configured in production. Set FRONTEND_URL or ALLOWED_ORIGINS.');
+}
+
+function validateCorsOrigin(origin, callback) {
+    // Allow non-browser clients and same-origin server-side calls
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS'));
+}
 
 const io = new Server(server, {
     cors: {
-        origin: ALLOWED_ORIGINS,
+        origin: IS_PRODUCTION ? validateCorsOrigin : ALLOWED_ORIGINS,
         methods: ['GET', 'POST', 'PATCH', 'DELETE'],
     },
 });
@@ -71,10 +98,17 @@ app.use('/api/v1/bets', betLimiter);
 
 // ── Standard Middleware ──────────────────────────────────────
 app.use(cors({
-    origin: ALLOWED_ORIGINS,
+    origin: IS_PRODUCTION ? validateCorsOrigin : ALLOWED_ORIGINS,
     credentials: true,
 }));
 app.use(express.json({ limit: '1mb' }));
+
+app.use((err, _req, res, next) => {
+    if (err && err.message === 'Origin not allowed by CORS') {
+        return res.status(403).json({ success: false, error: 'Origin not allowed' });
+    }
+    return next(err);
+});
 
 // Attach io to every request (for WebSocket events in routes)
 app.use((req, _res, next) => {
@@ -103,12 +137,14 @@ const agentRoutes = require('./routes/agents');
 const arenaRoutes = require('./routes/arena');
 const matchRoutes = require('./routes/matches');
 const betRoutes = require('./routes/bets');
+const telegramRoutes = require('./routes/telegram');
 
 app.use('/api/v1/agents', agentRoutes);
 app.use('/api/v1/arena', arenaRoutes);
 app.use('/api/v1/matches', matchRoutes);
 app.use('/api/v1/bets', betRoutes);
 app.use('/api/v1/circle', require('./routes/circle'));
+app.use('/api/v1/telegram', telegramRoutes);
 
 // ── Leaderboard ──────────────────────────────────────────────
 app.get('/api/v1/leaderboard', (req, res) => {
@@ -130,6 +166,9 @@ app.get('/api/v1/stats', (_req, res) => {
     const agents = db.getAgents();
     const liveMatches = db.getLiveMatches();
     const history = db.getMatchHistory();
+    const platformEconomy = typeof db.getPlatformEconomy === 'function'
+        ? db.getPlatformEconomy()
+        : { treasuryMON: 0, totalPaidToAgents: 0, totalPaidToBettors: 0 };
 
     const totalBets = db.data.bets.reduce((sum, b) => sum + b.amount, 0);
     const activeAgents = agents.filter(a => a.status !== 'pending_claim').length;
@@ -143,6 +182,9 @@ app.get('/api/v1/stats', (_req, res) => {
             totalMatchesPlayed: history.length,
             totalBetsPlaced: db.data.bets.length,
             totalMONWagered: totalBets,
+            payoutTreasuryMON: platformEconomy.treasuryMON,
+            totalPaidToAgentsMON: platformEconomy.totalPaidToAgents,
+            totalPaidToBettorsMON: platformEconomy.totalPaidToBettors,
             onlineViewers: 1800 + Math.floor(Math.random() * 200),
         },
     });

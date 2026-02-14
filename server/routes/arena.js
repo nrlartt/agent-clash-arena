@@ -3,16 +3,75 @@
 // ═══════════════════════════════════════════════════════════════
 
 const express = require('express');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { authAgent, optionalAuth } = require('../middleware/auth');
 const db = require('../db');
 const blockchain = require('../utils/blockchain');
 const logger = require('../utils/logger');
+const { splitPool, distributeBettorsPool } = require('../utils/economy');
 
 const router = express.Router();
 
 // In-memory queue (not persisted)
 const matchQueue = [];
+const TOURNAMENT_MIN_AGENTS = Math.max(2, parseInt(process.env.TOURNAMENT_MIN_AGENTS || '8', 10));
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || '';
+let tournamentState = {
+    active: false,
+    id: null,
+    createdAt: null,
+    minAgents: TOURNAMENT_MIN_AGENTS,
+    currentRound: 0,
+    participants: [],
+    rounds: [],
+    champion: null,
+};
+
+function getEligibleTournamentAgents() {
+    return db.getAgents()
+        .filter(a => a.status === 'active')
+        .sort((a, b) => {
+            const rankA = Number.isFinite(a.rank) ? a.rank : 99999;
+            const rankB = Number.isFinite(b.rank) ? b.rank : 99999;
+            if (rankA !== rankB) return rankA - rankB;
+            return (b.powerRating || 0) - (a.powerRating || 0);
+        });
+}
+
+function maxPowerOfTwo(n) {
+    let p = 1;
+    while (p * 2 <= n) p *= 2;
+    return p;
+}
+
+function safeEqual(a, b) {
+    const aBuf = Buffer.from(String(a || ''), 'utf8');
+    const bBuf = Buffer.from(String(b || ''), 'utf8');
+    if (aBuf.length !== bBuf.length) return false;
+    return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+function requireAdmin(req, res, next) {
+    if (!ADMIN_API_KEY) {
+        if (process.env.NODE_ENV === 'production') {
+            return res.status(503).json({
+                success: false,
+                error: 'Admin API key is not configured',
+            });
+        }
+        return next();
+    }
+
+    const given = req.headers['x-admin-key'];
+    if (!safeEqual(given, ADMIN_API_KEY)) {
+        return res.status(401).json({
+            success: false,
+            error: 'Unauthorized admin action',
+        });
+    }
+    return next();
+}
 
 // ── GET /arena/heartbeat — Agent check-in ────────────────────
 router.get('/heartbeat', authAgent, (req, res) => {
@@ -224,6 +283,103 @@ router.get('/queue', (req, res) => {
     });
 });
 
+// ── GET /arena/tournament/status — Tournament readiness/status ─
+router.get('/tournament/status', (_req, res) => {
+    const eligibleAgents = getEligibleTournamentAgents();
+    const nextBracketSize = maxPowerOfTwo(eligibleAgents.length);
+    res.json({
+        success: true,
+        data: {
+            ...tournamentState,
+            eligibleAgents: eligibleAgents.length,
+            nextBracketSize,
+            ready: eligibleAgents.length >= tournamentState.minAgents,
+            upcomingParticipants: eligibleAgents.slice(0, nextBracketSize).map(a => ({
+                id: a.id,
+                name: a.name,
+                rank: a.rank,
+                powerRating: a.powerRating,
+            })),
+        },
+    });
+});
+
+function createTournamentRound(participantIds, io) {
+    const roundMatchIds = [];
+    for (let i = 0; i < participantIds.length; i += 2) {
+        const aId = participantIds[i];
+        const bId = participantIds[i + 1];
+        const a = db.getAgentById(aId);
+        const b = db.getAgentById(bId);
+        if (!a || !b) continue;
+        const match = createMatch(a, b, 'tournament', io);
+        roundMatchIds.push(match.id);
+    }
+    return roundMatchIds;
+}
+
+// ── POST /arena/tournament/start — Start bracket by active agent count ─
+router.post('/tournament/start', requireAdmin, (_req, res) => {
+    if (tournamentState.active) {
+        return res.status(409).json({
+            success: false,
+            error: 'Tournament already running',
+            tournament: tournamentState,
+        });
+    }
+
+    const eligibleAgents = getEligibleTournamentAgents();
+    if (eligibleAgents.length < TOURNAMENT_MIN_AGENTS) {
+        return res.status(400).json({
+            success: false,
+            error: `Not enough active agents for tournament. Need ${TOURNAMENT_MIN_AGENTS}, got ${eligibleAgents.length}`,
+        });
+    }
+
+    const bracketSize = Math.min(16, maxPowerOfTwo(eligibleAgents.length));
+    const participants = eligibleAgents.slice(0, bracketSize).map(a => a.id);
+    const tournamentId = `tournament-${Date.now()}`;
+    const roundMatchIds = createTournamentRound(participants, _req.io);
+
+    tournamentState = {
+        ...tournamentState,
+        active: true,
+        id: tournamentId,
+        createdAt: Date.now(),
+        champion: null,
+        currentRound: 1,
+        participants,
+        rounds: [{
+            round: 1,
+            participantIds: participants,
+            matchIds: roundMatchIds,
+            winners: [],
+        }],
+    };
+
+    db.addActivity({
+        type: 'tournament',
+        message: `Tournament ${tournamentId} started with ${participants.length} agents`,
+        time: Date.now(),
+        icon: '🏆',
+    });
+
+    if (_req.io) {
+        _req.io.emit('tournament:start', {
+            id: tournamentId,
+            participants: participants.length,
+            round: 1,
+            matchIds: roundMatchIds,
+        });
+    }
+
+    return res.json({
+        success: true,
+        message: 'Tournament started',
+        data: tournamentState,
+    });
+});
+
 // ── Matchmaking Logic ────────────────────────────────────────
 function tryMatchmaking(io) {
     if (matchQueue.length < 2) return null;
@@ -350,7 +506,13 @@ function endMatch(matchId, io) {
     const loserName = winnerId === match.agent1Id ? match.agent2Name : match.agent1Name;
     const loserId = winnerId === match.agent1Id ? match.agent2Id : match.agent1Id;
 
-    const monEarned = Math.floor(match.totalBets * 0.1) || 50;
+    const totalPool = Number(match.totalBets || 0);
+    const split = splitPool(totalPool);
+    const allBets = db.getBetsForMatch(matchId) || [];
+    const winningBets = allBets.filter(b => b.agentId === winnerId);
+    const bettorsDistribution = distributeBettorsPool(split.bettorsAmount, winningBets);
+    const platformCarry = split.platformAmount + Math.max(0, bettorsDistribution.unallocated || 0);
+    const winnerReward = split.winnerAmount;
 
     // Update winner stats
     const winner = db.getAgentById(winnerId);
@@ -361,7 +523,7 @@ function endMatch(matchId, io) {
                 ...winner.stats,
                 wins: winner.stats.wins + 1,
                 matchesPlayed: winner.stats.matchesPlayed + 1,
-                totalEarnings: winner.stats.totalEarnings + monEarned,
+                totalEarnings: winner.stats.totalEarnings + winnerReward,
                 currentStreak: winner.stats.currentStreak + 1,
                 killStreak: Math.max(winner.stats.killStreak, winner.stats.currentStreak + 1),
                 winRate: parseFloat((((winner.stats.wins + 1) / (winner.stats.matchesPlayed + 1)) * 100).toFixed(1)),
@@ -384,6 +546,26 @@ function endMatch(matchId, io) {
         });
     }
 
+    if (typeof db.updateBet === 'function') {
+        for (const bet of allBets) {
+            const isWinnerTicket = bet.agentId === winnerId;
+            db.updateBet(bet.id, {
+                status: isWinnerTicket ? 'won' : 'lost',
+                payout: isWinnerTicket ? (bettorsDistribution.payoutsByBetId[bet.id] || 0) : 0,
+                resolvedAt: Date.now(),
+            });
+        }
+    }
+
+    if (typeof db.getPlatformEconomy === 'function' && typeof db.updatePlatformEconomy === 'function') {
+        const economy = db.getPlatformEconomy();
+        db.updatePlatformEconomy({
+            treasuryMON: Number((economy.treasuryMON + platformCarry).toFixed(6)),
+            totalPaidToAgents: Number((economy.totalPaidToAgents + winnerReward).toFixed(6)),
+            totalPaidToBettors: Number((economy.totalPaidToBettors + bettorsDistribution.totalPayout).toFixed(6)),
+        });
+    }
+
     // Archive to history
     db.addMatchHistory({
         id: `hist-${matchId}`,
@@ -396,8 +578,20 @@ function endMatch(matchId, io) {
         winnerName,
         agent1FinalHP: match.agent1HP,
         agent2FinalHP: match.agent2HP,
-        totalBets: match.totalBets,
-        monEarned,
+        totalBets: totalPool,
+        monEarned: winnerReward,
+        payout: {
+            split: {
+                platformPct: split.platformPct,
+                winnerPct: split.winnerPct,
+                bettorsPct: split.bettorsPct,
+            },
+            platformAmount: platformCarry,
+            winnerAmount: winnerReward,
+            bettorsAmount: bettorsDistribution.totalPayout,
+            winningTickets: bettorsDistribution.winningTickets,
+            winningWallets: Object.keys(bettorsDistribution.payoutsByWallet || {}).length,
+        },
         duration: Math.floor((Date.now() - match.startedAt) / 1000),
         mode: match.mode,
         completedAt: Date.now(),
@@ -408,7 +602,7 @@ function endMatch(matchId, io) {
 
     db.addActivity({
         type: 'match_end',
-        message: `${winnerName} defeats ${loserName}! +${monEarned} MON earned`,
+        message: `${winnerName} defeats ${loserName}! Agent +${winnerReward} MON, Bettors +${bettorsDistribution.totalPayout.toFixed(2)} MON`,
         time: Date.now(),
         icon: '🏆',
     });
@@ -417,17 +611,17 @@ function endMatch(matchId, io) {
     (async () => {
         try {
             // Resolve the match on the smart contract
-            const resolveTx = await blockchain.resolveMatchOnChain(matchId, winnerId, match.agent1Id);
+            await blockchain.resolveMatchOnChain(matchId, winnerId, match.agent1Id);
             
             // Send MON reward directly to the winner's wallet (if they have one)
             if (winner && winner.owner && winner.owner.walletAddress) {
-                const rewardTx = await blockchain.sendReward(winner.owner.walletAddress, monEarned);
+                const rewardTx = await blockchain.sendReward(winner.owner.walletAddress, winnerReward);
                 if (rewardTx) {
                     logger.info('MON reward sent to winner', {
                         matchId,
                         winner: winnerName,
                         wallet: winner.owner.walletAddress,
-                        amount: monEarned,
+                        amount: winnerReward,
                         txHash: rewardTx,
                     });
                 }
@@ -442,7 +636,68 @@ function endMatch(matchId, io) {
             matchId,
             winnerId,
             winnerName,
-            monEarned,
+            monEarned: winnerReward,
+            payout: {
+                platform: platformCarry,
+                winner: winnerReward,
+                bettors: bettorsDistribution.totalPayout,
+            },
+        });
+    }
+
+    maybeAdvanceTournament(matchId, winnerId, io);
+}
+
+function maybeAdvanceTournament(matchId, winnerId, io) {
+    if (!tournamentState.active || tournamentState.currentRound < 1) return;
+    const current = tournamentState.rounds[tournamentState.currentRound - 1];
+    if (!current || !current.matchIds.includes(matchId)) return;
+    if (!current.winners.includes(winnerId)) current.winners.push(winnerId);
+
+    if (current.winners.length < current.matchIds.length) return;
+
+    if (current.winners.length === 1) {
+        tournamentState.active = false;
+        tournamentState.champion = current.winners[0];
+        db.addActivity({
+            type: 'tournament',
+            message: `Tournament ${tournamentState.id} ended. Champion: ${db.getAgentById(current.winners[0])?.name || current.winners[0]}`,
+            time: Date.now(),
+            icon: '🏅',
+        });
+        if (io) {
+            io.emit('tournament:end', {
+                id: tournamentState.id,
+                championId: tournamentState.champion,
+            });
+        }
+        return;
+    }
+
+    const nextRoundParticipants = [...current.winners];
+    const nextRound = tournamentState.currentRound + 1;
+    const matchIds = createTournamentRound(nextRoundParticipants, io);
+    tournamentState.currentRound = nextRound;
+    tournamentState.rounds.push({
+        round: nextRound,
+        participantIds: nextRoundParticipants,
+        matchIds,
+        winners: [],
+    });
+
+    db.addActivity({
+        type: 'tournament',
+        message: `Tournament ${tournamentState.id} advanced to round ${nextRound}`,
+        time: Date.now(),
+        icon: '🎯',
+    });
+
+    if (io) {
+        io.emit('tournament:round', {
+            id: tournamentState.id,
+            round: nextRound,
+            participants: nextRoundParticipants.length,
+            matchIds,
         });
     }
 }
@@ -450,5 +705,6 @@ function endMatch(matchId, io) {
 // Export for use in match actions
 router._endMatch = endMatch;
 router._matchQueue = matchQueue;
+router._tournamentState = () => tournamentState;
 
 module.exports = router;

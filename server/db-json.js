@@ -13,6 +13,11 @@ const DEFAULT_DB = {
     bets: [],
     matchHistory: [],
     activityFeed: [],
+    platform: {
+        treasuryMON: 0,
+        totalPaidToAgents: 0,
+        totalPaidToBettors: 0,
+    },
 };
 
 class JsonDatabase {
@@ -25,7 +30,15 @@ class JsonDatabase {
         try {
             if (fs.existsSync(DB_PATH)) {
                 const raw = fs.readFileSync(DB_PATH, 'utf-8');
-                return JSON.parse(raw);
+                const parsed = JSON.parse(raw);
+                return {
+                    ...JSON.parse(JSON.stringify(DEFAULT_DB)),
+                    ...parsed,
+                    platform: {
+                        ...DEFAULT_DB.platform,
+                        ...(parsed.platform || {}),
+                    },
+                };
             }
         } catch (err) {
             console.error('[DB-JSON] Failed to load:', err.message);
@@ -106,6 +119,22 @@ class JsonDatabase {
         return bet;
     }
 
+    updateBet(id, updates) {
+        const idx = this.data.bets.findIndex(b => b.id === id);
+        if (idx === -1) return null;
+        this.data.bets[idx] = { ...this.data.bets[idx], ...updates };
+        this._save();
+        return this.data.bets[idx];
+    }
+
+    getBetsByWallet(walletAddress, limit = 50) {
+        const addr = String(walletAddress || '').toLowerCase();
+        return this.data.bets
+            .filter(b => String(b.walletAddress || '').toLowerCase() === addr)
+            .slice(-limit)
+            .reverse();
+    }
+
     // ── Activity Feed ───────────────────────────────────────
     addActivity(event) {
         this.data.activityFeed.unshift(event);
@@ -127,6 +156,24 @@ class JsonDatabase {
             return 0;
         });
         return active.slice(0, limit);
+    }
+
+    // ── Platform Treasury ───────────────────────────────────────
+    updatePlatformEconomy(updates = {}) {
+        this.data.platform = {
+            ...DEFAULT_DB.platform,
+            ...(this.data.platform || {}),
+            ...updates,
+        };
+        this._save();
+        return this.data.platform;
+    }
+
+    getPlatformEconomy() {
+        return {
+            ...DEFAULT_DB.platform,
+            ...(this.data.platform || {}),
+        };
     }
 }
 

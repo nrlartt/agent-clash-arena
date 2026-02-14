@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const db = require('../db');
+const API_KEY_REGEX = /^aca_[a-f0-9]{24}$/i;
 
 function authAgent(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -16,6 +17,12 @@ function authAgent(req, res, next) {
     }
 
     const apiKey = authHeader.slice(7).trim();
+    if (!API_KEY_REGEX.test(apiKey)) {
+        return res.status(401).json({
+            success: false,
+            error: 'Invalid API key format',
+        });
+    }
     const agent = db.getAgentByApiKey(apiKey);
 
     if (!agent) {
@@ -44,7 +51,9 @@ function optionalAuth(req, _res, next) {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const apiKey = authHeader.slice(7).trim();
-        req.agent = db.getAgentByApiKey(apiKey);
+        if (API_KEY_REGEX.test(apiKey)) {
+            req.agent = db.getAgentByApiKey(apiKey);
+        }
     }
     next();
 }
