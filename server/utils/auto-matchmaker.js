@@ -94,15 +94,16 @@ class AutoMatchmaker {
             isSimulated: agent1.isSimulated && agent2.isSimulated,
         };
 
-        // Try to create match on-chain
-        try {
-            await blockchain.createMatchOnChain(matchId, agent1.name, agent2.name);
-            this.currentMatch.onChain = true;
-            logger.info(`[AutoMatchmaker] Match ${matchId} created on-chain`);
-        } catch (err) {
-            this.currentMatch.onChain = false;
-            logger.warn(`[AutoMatchmaker] On-chain match creation failed: ${err.message}`);
-        }
+        // Try to create match on-chain (NON-BLOCKING — never delay match start)
+        this.currentMatch.onChain = false;
+        blockchain.createMatchOnChain(matchId, agent1.name, agent2.name)
+            .then(() => {
+                this.currentMatch.onChain = true;
+                logger.info(`[AutoMatchmaker] Match ${matchId} created on-chain`);
+            })
+            .catch(err => {
+                logger.warn(`[AutoMatchmaker] On-chain match creation failed: ${err.message}`);
+            });
 
         // Start BETTING phase
         this.phase = 'BETTING';
@@ -193,15 +194,13 @@ class AutoMatchmaker {
             timestamp: Date.now(),
         };
 
-        // Resolve match on-chain (non-blocking)
+        // Resolve match on-chain (truly NON-BLOCKING — fire and forget)
         if (this.currentMatch.onChain) {
-            try {
-                const winningSide = winnerId === '1' ? 1 : 2;
-                await blockchain.resolveMatchOnChain(this.currentMatch.id, winningSide);
-                logger.info(`[AutoMatchmaker] Match ${this.currentMatch.id} resolved on-chain, winner: ${winner.name}`);
-            } catch (err) {
-                logger.warn(`[AutoMatchmaker] On-chain resolve failed: ${err.message}`);
-            }
+            const mId = this.currentMatch.id;
+            const wSide = winnerId === '1' ? 1 : 2;
+            blockchain.resolveMatchOnChain(mId, wSide)
+                .then(() => logger.info(`[AutoMatchmaker] Match ${mId} resolved on-chain, winner: ${winner.name}`))
+                .catch(err => logger.warn(`[AutoMatchmaker] On-chain resolve failed: ${err.message}`));
         }
 
         // RESULT phase

@@ -19,6 +19,16 @@ const BETTING_ABI = [
 
 const Side = { None: 0, AgentA: 1, AgentB: 2 };
 
+// Helper: race a promise against a timeout
+function withTimeout(promise, ms, label) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms))
+    ]);
+}
+
+const TX_TIMEOUT = 15000;  // 15 seconds max for any blockchain operation
+
 class BlockchainService {
     constructor() {
         this.provider = null;
@@ -74,10 +84,11 @@ class BlockchainService {
 
         try {
             const matchBytes = this._toBytes32(matchId);
-            const tx = await this.contract.createMatch(matchBytes, agent1Name, agent2Name, {
-                gasLimit: 300000,
-            });
-            const receipt = await tx.wait();
+            const tx = await withTimeout(
+                this.contract.createMatch(matchBytes, agent1Name, agent2Name, { gasLimit: 300000 }),
+                TX_TIMEOUT, 'createMatch.send'
+            );
+            const receipt = await withTimeout(tx.wait(), TX_TIMEOUT, 'createMatch.wait');
             logger.info('[Blockchain] Match created on-chain', {
                 matchId,
                 txHash: receipt.hash,
@@ -101,8 +112,8 @@ class BlockchainService {
 
         try {
             const matchBytes = this._toBytes32(matchId);
-            const tx = await this.contract.lockMatch(matchBytes, { gasLimit: 100000 });
-            const receipt = await tx.wait();
+            const tx = await withTimeout(this.contract.lockMatch(matchBytes, { gasLimit: 100000 }), TX_TIMEOUT, 'lockMatch.send');
+            const receipt = await withTimeout(tx.wait(), TX_TIMEOUT, 'lockMatch.wait');
             logger.info('[Blockchain] Match locked on-chain', { matchId, txHash: receipt.hash });
             return receipt.hash;
         } catch (err) {
@@ -122,13 +133,13 @@ class BlockchainService {
 
         try {
             const matchBytes = this._toBytes32(matchId);
-            // Determine winning side: AgentA (1) or AgentB (2)
             const winningSide = winnerId === agent1Id ? Side.AgentA : Side.AgentB;
 
-            const tx = await this.contract.resolveMatch(matchBytes, winningSide, {
-                gasLimit: 200000,
-            });
-            const receipt = await tx.wait();
+            const tx = await withTimeout(
+                this.contract.resolveMatch(matchBytes, winningSide, { gasLimit: 200000 }),
+                TX_TIMEOUT, 'resolveMatch.send'
+            );
+            const receipt = await withTimeout(tx.wait(), TX_TIMEOUT, 'resolveMatch.wait');
             logger.info('[Blockchain] Match resolved on-chain', {
                 matchId,
                 winnerId,
