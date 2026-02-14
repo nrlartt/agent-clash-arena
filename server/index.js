@@ -480,5 +480,9 @@ server.listen(PORT, async () => {
     logger.info('═══════════════════════════════════════════════');
 
     // Start auto matchmaker after server is ready
-    matchmaker.start();
+    try {
+        matchmaker.start();
+    } catch (err) {
+        logger.error('AutoMatchmaker failed to start', { error: err.message, stack: err.stack });
+    }
 });

@@ -40,7 +40,16 @@ class AutoMatchmaker {
 
     start() {
         logger.info('[AutoMatchmaker] Starting automatic match cycle');
-        this._nextMatch();
+        this._safeNextMatch();
+    }
+
+    async _safeNextMatch() {
+        try {
+            await this._nextMatch();
+        } catch (err) {
+            logger.error('[AutoMatchmaker] Match cycle error, retrying in 10s', { error: err.message });
+            this.phaseTimer = setTimeout(() => this._safeNextMatch(), 10000);
+        }
     }
 
     stop() {
@@ -200,7 +209,7 @@ class AutoMatchmaker {
             this.io.emit('match:phase', { phase: 'COOLDOWN' });
 
             this.phaseTimer = setTimeout(() => {
-                this._nextMatch();
+                this._safeNextMatch();
             }, COOLDOWN_DURATION);
         }, RESULT_DURATION);
     }
