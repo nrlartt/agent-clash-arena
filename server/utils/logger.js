@@ -30,25 +30,32 @@ const transports = [
     }),
 ];
 
-// In production, also log to files
+// In production, also log to files (skip if dir creation fails - e.g. Docker readonly)
 if (IS_PRODUCTION) {
+    const fs = require('fs');
     const logsDir = path.join(__dirname, '..', 'logs');
     
-    transports.push(
-        new winston.transports.File({
-            filename: path.join(logsDir, 'error.log'),
-            level: 'error',
-            maxsize: 5 * 1024 * 1024, // 5MB
-            maxFiles: 5,
-            format: prodFormat,
-        }),
-        new winston.transports.File({
-            filename: path.join(logsDir, 'combined.log'),
-            maxsize: 10 * 1024 * 1024, // 10MB
-            maxFiles: 5,
-            format: prodFormat,
-        })
-    );
+    try {
+        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+        
+        transports.push(
+            new winston.transports.File({
+                filename: path.join(logsDir, 'error.log'),
+                level: 'error',
+                maxsize: 5 * 1024 * 1024,
+                maxFiles: 5,
+                format: prodFormat,
+            }),
+            new winston.transports.File({
+                filename: path.join(logsDir, 'combined.log'),
+                maxsize: 10 * 1024 * 1024,
+                maxFiles: 5,
+                format: prodFormat,
+            })
+        );
+    } catch {
+        // Can't write to filesystem -- console only
+    }
 }
 
 const logger = winston.createLogger({
@@ -66,8 +73,7 @@ process.on('unhandledRejection', (reason) => {
 
 process.on('uncaughtException', (err) => {
     logger.error('Uncaught Exception', { error: err.message, stack: err.stack });
-    // Give logger time to flush, then exit
-    setTimeout(() => process.exit(1), 1000);
+    // Don't exit -- keep the server running
 });
 
 module.exports = logger;
