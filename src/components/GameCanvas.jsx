@@ -22,7 +22,25 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
     useEffect(() => { agent1Ref.current = agent1; }, [agent1]);
     useEffect(() => { agent2Ref.current = agent2; }, [agent2]);
 
+    const isPlayingRef = useRef(isPlaying);
     const drawCountRef = useRef(0);
+
+    // When backend says match is over (isPlaying → false), freeze the canvas
+    useEffect(() => {
+        isPlayingRef.current = isPlaying;
+        if (!isPlaying && engineRef.current) {
+            // Stop the engine simulation so agents freeze in place
+            try {
+                engineRef.current.pause?.();
+                // If engine has no pause, force-finish it
+                if (!engineRef.current.pause) {
+                    engineRef.current.isPaused = true;
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+    }, [isPlaying]);
 
     const draw = useCallback((ctx, state, w, h) => {
         const a1 = agent1Ref.current;
@@ -933,17 +951,11 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
             engine.onGameEnd = (result) => {
                 if (matchEnded) return;
                 matchEnded = true;
+                // Sound only — backend controls the actual match lifecycle
                 if (result.reason === 'ko') {
                     playSound('ko');
-                } else {
-                    playSound('cheer');
                 }
-                if (onStateUpdateRef.current) {
-                    onStateUpdateRef.current({ type: 'match_end', ...result, agents: engine.getState().agents });
-                }
-                if (onMatchEndRef.current) {
-                    onMatchEndRef.current(result);
-                }
+                // Don't call onMatchEnd — backend matchmaker decides the winner
             };
 
             engine.onRoundEnd = (roundInfo) => {
@@ -967,7 +979,11 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
             const loop = () => {
                 if (!running) return;
                 try {
-                    engine.update(16.67);
+                    // Only update engine if match is still playing
+                    if (isPlayingRef.current && !engine.isPaused) {
+                        engine.update(16.67);
+                    }
+                    
                     const state = engine.getState();
                     const cw = sizeRef.w;
                     const ch = sizeRef.h;
@@ -977,7 +993,7 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
                     }
 
                     const now = performance.now();
-                    if (!state.isFinished && now - lastTickNotify > 200) {
+                    if (isPlayingRef.current && !state.isFinished && now - lastTickNotify > 200) {
                         lastTickNotify = now;
                         if (onStateUpdateRef.current) {
                             onStateUpdateRef.current({
