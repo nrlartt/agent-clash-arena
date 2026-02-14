@@ -149,25 +149,25 @@ app.use('/api/v1/telegram', telegramRoutes);
 app.use('/api/v1/shop', shopRoutes);
 
 // ── Leaderboard ──────────────────────────────────────────────
-app.get('/api/v1/leaderboard', (req, res) => {
+app.get('/api/v1/leaderboard', async (req, res) => {
     const sortBy = req.query.sort || 'winRate';
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
-    const data = db.getLeaderboard(sortBy, limit);
+    const data = await db.getLeaderboard(sortBy, limit);
     res.json({ success: true, data });
 });
 
 // ── Activity Feed ────────────────────────────────────────────
-app.get('/api/v1/activity', (req, res) => {
+app.get('/api/v1/activity', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
-    const data = db.getActivity(limit);
+    const data = await db.getActivity(limit);
     res.json({ success: true, data });
 });
 
 // ── Platform Stats ───────────────────────────────────────────
-app.get('/api/v1/stats', (_req, res) => {
-    const agents = db.getAgents();
-    const liveMatches = db.getLiveMatches();
-    const history = db.getMatchHistory();
+app.get('/api/v1/stats', async (_req, res) => {
+    const agents = await db.getAgents();
+    const liveMatches = await db.getLiveMatches();
+    const history = await db.getMatchHistory();
     const platformEconomy = typeof db.getPlatformEconomy === 'function'
         ? db.getPlatformEconomy()
         : { treasuryMON: 0, totalPaidToAgents: 0, totalPaidToBettors: 0 };
@@ -336,13 +336,17 @@ io.on('connection', (socket) => {
     }
 
     // Join match room for live updates
-    socket.on('match:watch', (matchId) => {
+    socket.on('match:watch', async (matchId) => {
         socket.join(`match:${matchId}`);
         logger.debug(`WS watching match`, { socketId: socket.id, matchId });
 
-        const match = db.getMatchById(matchId);
-        if (match) {
-            socket.emit('match:state', match);
+        try {
+            const match = await db.getMatchById(matchId);
+            if (match) {
+                socket.emit('match:state', match);
+            }
+        } catch (err) {
+            logger.warn('Failed to get match for watch', { matchId, error: err.message });
         }
     });
 
@@ -360,13 +364,18 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('arena:status', () => {
-        socket.emit('arena:status', {
-            liveMatches: db.getLiveMatches(),
-            queueSize: require('./routes/arena')._matchQueue?.length || 0,
-            currentMatch: matchmaker.currentMatch,
-            phase: matchmaker.phase,
-        });
+    socket.on('arena:status', async () => {
+        try {
+            const liveMatches = await db.getLiveMatches();
+            socket.emit('arena:status', {
+                liveMatches,
+                queueSize: require('./routes/arena')._matchQueue?.length || 0,
+                currentMatch: matchmaker.currentMatch,
+                phase: matchmaker.phase,
+            });
+        } catch (err) {
+            logger.warn('Failed to get arena status', { error: err.message });
+        }
     });
 
     socket.on('disconnect', () => {

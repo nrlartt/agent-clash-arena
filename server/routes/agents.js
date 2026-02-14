@@ -45,7 +45,7 @@ function toSafeAgentView(agent) {
 }
 
 // ── POST /agents/register — Self-registration (no auth) ──────
-router.post('/register', (req, res) => {
+router.post('/register', async (req, res) => {
     const { name, description, strategy, weapon_preference } = req.body;
 
     // Validate
@@ -64,7 +64,7 @@ router.post('/register', (req, res) => {
     }
 
     // Check duplicate name
-    if (db.getAgentByName(name)) {
+    if (await db.getAgentByName(name)) {
         return res.status(409).json({
             success: false,
             error: `Agent "${name}" already exists`,
@@ -122,10 +122,10 @@ router.post('/register', (req, res) => {
         });
     }
 
-    db.addAgent(agent);
+    await db.addAgent(agent);
 
     // Activity feed
-    db.addActivity({
+    await db.addActivity({
         type: 'registration',
         message: `${name} just registered! Awaiting human claim...`,
         time: Date.now(),
@@ -202,7 +202,7 @@ router.get('/status', authAgent, (req, res) => {
 });
 
 // ── PATCH /agents/me/profile — Update fighter profile ────────
-router.patch('/me/profile', authAgent, (req, res) => {
+router.patch('/me/profile', authAgent, async (req, res) => {
     const { description, strategy, weapon_preference, battle_cry, avatar_emoji } = req.body;
     const updates = {};
 
@@ -212,12 +212,12 @@ router.patch('/me/profile', authAgent, (req, res) => {
     if (battle_cry !== undefined) updates.battleCry = String(battle_cry).slice(0, 128);
     if (avatar_emoji !== undefined) updates.avatar = String(avatar_emoji).slice(0, 4);
 
-    const updated = db.updateAgent(req.agent.id, updates);
+    const updated = await db.updateAgent(req.agent.id, updates);
     res.json({ success: true, data: toSafeAgentView(updated) });
 });
 
 // ── GET /agents/verify-claim/:token — Check if claim token is valid ──
-router.get('/verify-claim/:token', (req, res) => {
+router.get('/verify-claim/:token', async (req, res) => {
     const { token } = req.params;
     
     if (!token || !token.startsWith('aca_claim_')) {
@@ -254,7 +254,7 @@ router.get('/verify-claim/:token', (req, res) => {
 });
 
 // ── POST /agents/claim — Human claims an agent ───────────────
-router.post('/claim', (req, res) => {
+router.post('/claim', async (req, res) => {
     const { claim_token, wallet_address, twitter_handle, budget } = req.body;
 
     if (!claim_token || !wallet_address) {
@@ -303,7 +303,7 @@ router.post('/claim', (req, res) => {
 
     const budgetAmount = Math.min(Math.max(parseFloat(budget) || 100, 0), 100000);
 
-    const updated = db.updateAgent(agent.id, {
+    const updated = await db.updateAgent(agent.id, {
         status: 'active',
         claimedAt: new Date().toISOString(),
         owner: {
@@ -320,7 +320,7 @@ router.post('/claim', (req, res) => {
         },
     });
 
-    db.addActivity({
+    await db.addActivity({
         type: 'claim',
         message: `${agent.name} was claimed by ${twitter_handle ? '@' + twitter_handle : wallet_address.slice(0, 6) + '...' + wallet_address.slice(-4)} with ${budgetAmount} MON budget`,
         time: Date.now(),
@@ -365,7 +365,7 @@ router.get('/me/budget', authAgent, (req, res) => {
 });
 
 // ── PATCH /agents/me/budget — Owner updates agent's budget ───
-router.patch('/me/budget', authAgent, (req, res) => {
+router.patch('/me/budget', authAgent, async (req, res) => {
     const agent = req.agent;
     const { amount, auto_refill } = req.body;
 
@@ -397,7 +397,7 @@ router.patch('/me/budget', authAgent, (req, res) => {
         return res.status(400).json({ success: false, error: 'No valid fields to update' });
     }
 
-    const updated = db.updateAgent(agent.id, updates);
+    const updated = await db.updateAgent(agent.id, updates);
     res.json({
         success: true,
         budget: updated.budget,
@@ -421,9 +421,9 @@ router.get('/me/earnings', authAgent, (req, res) => {
 });
 
 // ── GET /agents/me/matches — Match history for agent ─────────
-router.get('/me/matches', authAgent, (req, res) => {
+router.get('/me/matches', authAgent, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-    const history = db.getMatchHistory()
+    const history = (await db.getMatchHistory())
         .filter(m => m.agent1Id === req.agent.id || m.agent2Id === req.agent.id)
         .slice(0, limit);
     res.json({ success: true, data: history });

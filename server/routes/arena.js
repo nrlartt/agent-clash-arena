@@ -28,8 +28,8 @@ let tournamentState = {
     champion: null,
 };
 
-function getEligibleTournamentAgents() {
-    return db.getAgents()
+async function getEligibleTournamentAgents() {
+    return (await db.getAgents())
         .filter(a => a.status === 'active')
         .sort((a, b) => {
             const rankA = Number.isFinite(a.rank) ? a.rank : 99999;
@@ -67,11 +67,11 @@ function requireAdmin(req, res, next) {
 }
 
 // ── GET /arena/heartbeat — Agent check-in ────────────────────
-router.get('/heartbeat', authAgent, (req, res) => {
+router.get('/heartbeat', authAgent, async (req, res) => {
     const agent = req.agent;
 
     // Update last heartbeat
-    db.updateAgent(agent.id, { lastHeartbeat: Date.now() });
+    await db.updateAgent(agent.id, { lastHeartbeat: Date.now() });
 
     // Check for pending matches
     const liveMatches = await db.getLiveMatches();
@@ -80,11 +80,11 @@ router.get('/heartbeat', authAgent, (req, res) => {
     );
 
     // Get notifications (recent activity relevant to this agent)
-    const notifications = db.getActivity(10).filter(
+    const notifications = (await db.getActivity(10)).filter(
         a => a.message && a.message.includes(agent.name)
     );
 
-    db.addActivity({
+    await db.addActivity({
         type: 'heartbeat',
         message: `${agent.name} heartbeat received — ready for matches`,
         time: Date.now(),
@@ -115,7 +115,7 @@ router.get('/heartbeat', authAgent, (req, res) => {
 // ── POST /arena/queue — Join matchmaking ─────────────────────
 const QUEUE_ENTRY_FEE = 10; // 10 MON per ranked match
 
-router.post('/queue', authAgent, (req, res) => {
+router.post('/queue', authAgent, async (req, res) => {
     const agent = req.agent;
     const { mode } = req.body;
 
@@ -162,7 +162,7 @@ router.post('/queue', authAgent, (req, res) => {
         }
 
         // Deduct entry fee from budget
-        db.updateAgent(agent.id, {
+        await db.updateAgent(agent.id, {
             budget: {
                 ...agent.budget,
                 spent: (agent.budget.spent || 0) + QUEUE_ENTRY_FEE,
@@ -183,9 +183,9 @@ router.post('/queue', authAgent, (req, res) => {
 
     matchQueue.push(queueEntry);
 
-    db.updateAgent(agent.id, { status: 'in_queue' });
+    await db.updateAgent(agent.id, { status: 'in_queue' });
 
-    db.addActivity({
+    await db.addActivity({
         type: 'queue',
         message: `${agent.name} joined ${mode || 'ranked'} matchmaking queue`,
         time: Date.now(),
@@ -193,7 +193,7 @@ router.post('/queue', authAgent, (req, res) => {
     });
 
     // Try to match immediately
-    const match = tryMatchmaking(req.io);
+    const match = await tryMatchmaking(req.io);
 
     res.json({
         success: true,
@@ -205,7 +205,7 @@ router.post('/queue', authAgent, (req, res) => {
 });
 
 // ── POST /arena/challenge — Challenge specific agent ─────────
-router.post('/challenge', authAgent, (req, res) => {
+router.post('/challenge', authAgent, async (req, res) => {
     const { opponent, wager } = req.body;
 
     if (!opponent) {
@@ -215,7 +215,7 @@ router.post('/challenge', authAgent, (req, res) => {
         });
     }
 
-    const target = db.getAgentByName(opponent) || db.getAgentById(opponent);
+    const target = (await db.getAgentByName(opponent)) || (await db.getAgentById(opponent));
 
     if (!target) {
         return res.status(404).json({
@@ -239,9 +239,9 @@ router.post('/challenge', authAgent, (req, res) => {
     }
 
     // Create the match
-    const match = createMatch(req.agent, target, 'challenge', req.io);
+    const match = await createMatch(req.agent, target, 'challenge', req.io);
 
-    db.addActivity({
+    await db.addActivity({
         type: 'challenge',
         message: `${req.agent.name} challenged ${target.name} to a duel!`,
         time: Date.now(),
@@ -260,8 +260,8 @@ router.post('/challenge', authAgent, (req, res) => {
 });
 
 // ── GET /arena/live — Get all live matches (public) ──────────
-router.get('/live', (req, res) => {
-    const live = db.getLiveMatches();
+router.get('/live', async (req, res) => {
+    const live = await db.getLiveMatches();
     res.json({ success: true, data: live });
 });
 
@@ -279,8 +279,8 @@ router.get('/queue', (req, res) => {
 });
 
 // ── GET /arena/tournament/status — Tournament readiness/status ─
-router.get('/tournament/status', (_req, res) => {
-    const eligibleAgents = getEligibleTournamentAgents();
+router.get('/tournament/status', async (_req, res) => {
+    const eligibleAgents = await getEligibleTournamentAgents();
     const nextBracketSize = maxPowerOfTwo(eligibleAgents.length);
     res.json({
         success: true,
@@ -299,22 +299,22 @@ router.get('/tournament/status', (_req, res) => {
     });
 });
 
-function createTournamentRound(participantIds, io) {
+async function createTournamentRound(participantIds, io) {
     const roundMatchIds = [];
     for (let i = 0; i < participantIds.length; i += 2) {
         const aId = participantIds[i];
         const bId = participantIds[i + 1];
-        const a = db.getAgentById(aId);
-        const b = db.getAgentById(bId);
+        const a = await db.getAgentById(aId);
+        const b = await db.getAgentById(bId);
         if (!a || !b) continue;
-        const match = createMatch(a, b, 'tournament', io);
+        const match = await createMatch(a, b, 'tournament', io);
         roundMatchIds.push(match.id);
     }
     return roundMatchIds;
 }
 
 // ── POST /arena/tournament/start — Start bracket by active agent count ─
-router.post('/tournament/start', requireAdmin, (_req, res) => {
+router.post('/tournament/start', requireAdmin, async (_req, res) => {
     if (tournamentState.active) {
         return res.status(409).json({
             success: false,
@@ -323,7 +323,7 @@ router.post('/tournament/start', requireAdmin, (_req, res) => {
         });
     }
 
-    const eligibleAgents = getEligibleTournamentAgents();
+    const eligibleAgents = await getEligibleTournamentAgents();
     if (eligibleAgents.length < TOURNAMENT_MIN_AGENTS) {
         return res.status(400).json({
             success: false,
@@ -334,7 +334,7 @@ router.post('/tournament/start', requireAdmin, (_req, res) => {
     const bracketSize = Math.min(16, maxPowerOfTwo(eligibleAgents.length));
     const participants = eligibleAgents.slice(0, bracketSize).map(a => a.id);
     const tournamentId = `tournament-${Date.now()}`;
-    const roundMatchIds = createTournamentRound(participants, _req.io);
+    const roundMatchIds = await createTournamentRound(participants, _req.io);
 
     tournamentState = {
         ...tournamentState,
@@ -352,7 +352,7 @@ router.post('/tournament/start', requireAdmin, (_req, res) => {
         }],
     };
 
-    db.addActivity({
+    await db.addActivity({
         type: 'tournament',
         message: `Tournament ${tournamentId} started with ${participants.length} agents`,
         time: Date.now(),
@@ -376,22 +376,22 @@ router.post('/tournament/start', requireAdmin, (_req, res) => {
 });
 
 // ── Matchmaking Logic ────────────────────────────────────────
-function tryMatchmaking(io) {
+async function tryMatchmaking(io) {
     if (matchQueue.length < 2) return null;
 
     // Simple matchmaking: match first two in queue (can be improved with ELO)
     const a1 = matchQueue.shift();
     const a2 = matchQueue.shift();
 
-    const agent1 = db.getAgentById(a1.agentId);
-    const agent2 = db.getAgentById(a2.agentId);
+    const agent1 = await db.getAgentById(a1.agentId);
+    const agent2 = await db.getAgentById(a2.agentId);
 
     if (!agent1 || !agent2) return null;
 
-    return createMatch(agent1, agent2, a1.mode, io);
+    return await createMatch(agent1, agent2, a1.mode, io);
 }
 
-function createMatch(agent1, agent2, mode, io) {
+async function createMatch(agent1, agent2, mode, io) {
     const matchId = `match-${uuidv4().slice(0, 8)}`;
 
     const match = {
@@ -422,13 +422,13 @@ function createMatch(agent1, agent2, mode, io) {
         lastActions: [],
     };
 
-    db.addMatch(match);
+    await db.addMatch(match);
 
     // Update agent statuses
-    db.updateAgent(agent1.id, { status: 'in_match' });
-    db.updateAgent(agent2.id, { status: 'in_match' });
+    await db.updateAgent(agent1.id, { status: 'in_match' });
+    await db.updateAgent(agent2.id, { status: 'in_match' });
 
-    db.addActivity({
+    await db.addActivity({
         type: 'match_start',
         message: `${agent1.name} vs ${agent2.name} — FIGHT!`,
         time: Date.now(),
@@ -452,47 +452,52 @@ function createMatch(agent1, agent2, mode, io) {
 }
 
 function startMatchTimer(matchId, io) {
-    const interval = setInterval(() => {
-        const match = db.getMatchById(matchId);
-        if (!match || match.status !== 'live') {
-            clearInterval(interval);
-            return;
-        }
+    const interval = setInterval(async () => {
+        try {
+            const match = await db.getMatchById(matchId);
+            if (!match || match.status !== 'live') {
+                clearInterval(interval);
+                return;
+            }
 
-        // Decrease time
-        const newTime = match.timeRemaining - 1;
+            // Decrease time
+            const newTime = match.timeRemaining - 1;
 
-        if (newTime <= 0) {
-            // End round or match
-            if (match.round >= match.maxRounds) {
-                endMatch(matchId, io);
-            } else {
-                db.updateMatch(matchId, {
-                    round: match.round + 1,
-                    timeRemaining: 90,
+            if (newTime <= 0) {
+                // End round or match
+                if (match.round >= match.maxRounds) {
+                    await endMatch(matchId, io);
+                } else {
+                    await db.updateMatch(matchId, {
+                        round: match.round + 1,
+                        timeRemaining: 90,
+                    });
+                }
+                clearInterval(interval);
+                return;
+            }
+
+            await db.updateMatch(matchId, { timeRemaining: newTime });
+
+            // Emit tick
+            if (io) {
+                io.to(`match:${matchId}`).emit('match:tick', {
+                    matchId,
+                    timeRemaining: newTime,
+                    agent1HP: match.agent1HP,
+                    agent2HP: match.agent2HP,
+                    round: match.round,
                 });
             }
+        } catch (err) {
+            logger.error('Match timer error', { matchId, error: err.message });
             clearInterval(interval);
-            return;
-        }
-
-        db.updateMatch(matchId, { timeRemaining: newTime });
-
-        // Emit tick
-        if (io) {
-            io.to(`match:${matchId}`).emit('match:tick', {
-                matchId,
-                timeRemaining: newTime,
-                agent1HP: match.agent1HP,
-                agent2HP: match.agent2HP,
-                round: match.round,
-            });
         }
     }, 1000);
 }
 
-function endMatch(matchId, io) {
-    const match = db.getMatchById(matchId);
+async function endMatch(matchId, io) {
+    const match = await db.getMatchById(matchId);
     if (!match) return;
 
     // Determine winner
@@ -503,16 +508,16 @@ function endMatch(matchId, io) {
 
     const totalPool = Number(match.totalBets || 0);
     const split = splitPool(totalPool);
-    const allBets = db.getBetsForMatch(matchId) || [];
+    const allBets = (await db.getBetsForMatch(matchId)) || [];
     const winningBets = allBets.filter(b => b.agentId === winnerId);
     const bettorsDistribution = distributeBettorsPool(split.bettorsAmount, winningBets);
     const platformCarry = split.platformAmount + Math.max(0, bettorsDistribution.unallocated || 0);
     const winnerReward = split.winnerAmount;
 
     // Update winner stats
-    const winner = db.getAgentById(winnerId);
+    const winner = await db.getAgentById(winnerId);
     if (winner) {
-        db.updateAgent(winnerId, {
+        await db.updateAgent(winnerId, {
             status: 'active',
             stats: {
                 ...winner.stats,
@@ -527,9 +532,9 @@ function endMatch(matchId, io) {
     }
 
     // Update loser stats
-    const loser = db.getAgentById(loserId);
+    const loser = await db.getAgentById(loserId);
     if (loser) {
-        db.updateAgent(loserId, {
+        await db.updateAgent(loserId, {
             status: 'active',
             stats: {
                 ...loser.stats,
@@ -544,7 +549,7 @@ function endMatch(matchId, io) {
     if (typeof db.updateBet === 'function') {
         for (const bet of allBets) {
             const isWinnerTicket = bet.agentId === winnerId;
-            db.updateBet(bet.id, {
+            await db.updateBet(bet.id, {
                 status: isWinnerTicket ? 'won' : 'lost',
                 payout: isWinnerTicket ? (bettorsDistribution.payoutsByBetId[bet.id] || 0) : 0,
                 resolvedAt: Date.now(),
@@ -553,8 +558,8 @@ function endMatch(matchId, io) {
     }
 
     if (typeof db.getPlatformEconomy === 'function' && typeof db.updatePlatformEconomy === 'function') {
-        const economy = db.getPlatformEconomy();
-        db.updatePlatformEconomy({
+        const economy = await db.getPlatformEconomy();
+        await db.updatePlatformEconomy({
             treasuryMON: Number((economy.treasuryMON + platformCarry).toFixed(6)),
             totalPaidToAgents: Number((economy.totalPaidToAgents + winnerReward).toFixed(6)),
             totalPaidToBettors: Number((economy.totalPaidToBettors + bettorsDistribution.totalPayout).toFixed(6)),
@@ -562,7 +567,7 @@ function endMatch(matchId, io) {
     }
 
     // Archive to history
-    db.addMatchHistory({
+    await db.addMatchHistory({
         id: `hist-${matchId}`,
         matchId,
         agent1Id: match.agent1Id,
@@ -593,9 +598,9 @@ function endMatch(matchId, io) {
     });
 
     // Remove from active matches
-    db.removeMatch(matchId);
+    await db.removeMatch(matchId);
 
-    db.addActivity({
+    await db.addActivity({
         type: 'match_end',
         message: `${winnerName} defeats ${loserName}! Agent +${winnerReward} MON, Bettors +${bettorsDistribution.totalPayout.toFixed(2)} MON`,
         time: Date.now(),
@@ -640,10 +645,10 @@ function endMatch(matchId, io) {
         });
     }
 
-    maybeAdvanceTournament(matchId, winnerId, io);
+    await maybeAdvanceTournament(matchId, winnerId, io);
 }
 
-function maybeAdvanceTournament(matchId, winnerId, io) {
+async function maybeAdvanceTournament(matchId, winnerId, io) {
     if (!tournamentState.active || tournamentState.currentRound < 1) return;
     const current = tournamentState.rounds[tournamentState.currentRound - 1];
     if (!current || !current.matchIds.includes(matchId)) return;
@@ -654,9 +659,10 @@ function maybeAdvanceTournament(matchId, winnerId, io) {
     if (current.winners.length === 1) {
         tournamentState.active = false;
         tournamentState.champion = current.winners[0];
-        db.addActivity({
+        const champAgent = await db.getAgentById(current.winners[0]);
+        await db.addActivity({
             type: 'tournament',
-            message: `Tournament ${tournamentState.id} ended. Champion: ${db.getAgentById(current.winners[0])?.name || current.winners[0]}`,
+            message: `Tournament ${tournamentState.id} ended. Champion: ${champAgent?.name || current.winners[0]}`,
             time: Date.now(),
             icon: '🏅',
         });
@@ -671,7 +677,7 @@ function maybeAdvanceTournament(matchId, winnerId, io) {
 
     const nextRoundParticipants = [...current.winners];
     const nextRound = tournamentState.currentRound + 1;
-    const matchIds = createTournamentRound(nextRoundParticipants, io);
+    const matchIds = await createTournamentRound(nextRoundParticipants, io);
     tournamentState.currentRound = nextRound;
     tournamentState.rounds.push({
         round: nextRound,
@@ -680,7 +686,7 @@ function maybeAdvanceTournament(matchId, winnerId, io) {
         winners: [],
     });
 
-    db.addActivity({
+    await db.addActivity({
         type: 'tournament',
         message: `Tournament ${tournamentState.id} advanced to round ${nextRound}`,
         time: Date.now(),

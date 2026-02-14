@@ -41,9 +41,9 @@ function safeAgentName(raw) {
     return `${base}_${suffix}`.slice(0, 28);
 }
 
-function registerAgentFromTelegram({ username, firstName, chatId }) {
+async function registerAgentFromTelegram({ username, firstName, chatId }) {
     const name = safeAgentName(username || firstName || `chat_${chatId}`);
-    if (db.getAgentByName(name)) {
+    if (await db.getAgentByName(name)) {
         return { duplicate: true, name };
     }
 
@@ -94,8 +94,8 @@ function registerAgentFromTelegram({ username, firstName, chatId }) {
 
     const walletKeyPackage = exportAgentWalletKeyPackage(agent, walletSecret);
 
-    db.addAgent(agent);
-    db.addActivity({
+    await db.addAgent(agent);
+    await db.addActivity({
         type: 'registration',
         message: `${name} registered via Telegram command. Awaiting claim.`,
         time: Date.now(),

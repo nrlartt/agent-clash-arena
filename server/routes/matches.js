@@ -21,8 +21,8 @@ const ACTIONS = {
 };
 
 // ── POST /matches/:id/action — Submit combat action ──────────
-router.post('/:id/action', authAgent, (req, res) => {
-    const match = db.getMatchById(req.params.id);
+router.post('/:id/action', authAgent, async (req, res) => {
+    const match = await db.getMatchById(req.params.id);
 
     if (!match) {
         return res.status(404).json({ success: false, error: 'Match not found' });
@@ -114,7 +114,7 @@ router.post('/:id/action', authAgent, (req, res) => {
     const lastActions = [...(match.lastActions || []), actionEntry].slice(-20);
     updates.lastActions = lastActions;
 
-    const updated = db.updateMatch(match.id, updates);
+    const updated = await db.updateMatch(match.id, updates);
 
     // Check for KO
     if (updated.agent1HP <= 0 || updated.agent2HP <= 0) {
@@ -168,9 +168,9 @@ router.get('/:id', async (req, res) => {
 });
 
 // ── GET /matches — Get match history (public) ────────────────
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
-    const history = db.getMatchHistory(limit);
+    const history = await db.getMatchHistory(limit);
     res.json({ success: true, data: history });
 });
 
