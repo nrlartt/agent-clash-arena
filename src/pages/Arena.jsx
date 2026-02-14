@@ -52,6 +52,12 @@ export default function Arena() {
     const { inventories } = useInventory();
     const socketRef = useRef(null);
     const activityFeedRef = useRef(null);
+    const gameStateRef = useRef(gameState);
+
+    // Keep gameStateRef in sync
+    useEffect(() => {
+        gameStateRef.current = gameState;
+    }, [gameState]);
 
     // ── Socket.IO Connection to Backend Matchmaker ──
     useEffect(() => {
@@ -179,11 +185,10 @@ export default function Arena() {
         }
     }, []);
 
-    const handleMatchEnd = useCallback((result) => {
-        if (gameStateRef.current !== 'LIVE') return;
-        setMatchResult(result);
-        setGameState('FINISHED');
-        setTimeLeft(12);
+    // GameCanvas may fire its own match end - ignore it.
+    // We rely solely on backend matchmaker's match:phase RESULT event.
+    const handleMatchEnd = useCallback(() => {
+        // No-op: backend controls match lifecycle
     }, []);
 
     // ── Computed ──
@@ -485,7 +490,9 @@ export default function Arena() {
                                                     {winnerAgent.name} WINS!
                                                 </span>
                                                 <span className="arena-result-banner__reason">
-                                                    {matchResult.reason === 'ko' ? '💀 KNOCKOUT' : matchResult.reason === 'decision' ? '⚖️ DECISION' : '⏱️ TIME OUT'}
+                                                    {(matchResult.method || matchResult.reason || '').toLowerCase().includes('ko') ? '💀 KNOCKOUT' 
+                                                        : (matchResult.method || matchResult.reason || '').toLowerCase().includes('decision') ? '⚖️ DECISION' 
+                                                        : '⏱️ TIME OUT'}
                                                     {matchResult.duration ? ` · ${matchResult.duration}s` : ''}
                                                 </span>
                                             </div>

@@ -21,7 +21,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
     const [showWinPreview, setShowWinPreview] = useState(false);
     const [contractReady, setContractReady] = useState(false);
     const prevTimer = useRef(timer);
-    const { provider, isMonad } = useWallet();
+    const { provider, isMonad, account } = useWallet();
 
     // Initialize contract when wallet connects
     useEffect(() => {
@@ -104,37 +104,36 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
         playSound('bet');
 
         try {
-            const side = selectedSide === '1' ? BetSide.AgentA : BetSide.AgentB;
             const matchId = match.id || match.matchId || 'match-0';
-            let onChainSuccess = false;
+            const isOnChain = match.onChain && contractReady;
 
-            // Try on-chain bet first if contract is ready
-            if (contractReady) {
+            // Only try on-chain if the match is actually on-chain AND contract is ready
+            if (isOnChain) {
                 try {
+                    const side = selectedSide === '1' ? BetSide.AgentA : BetSide.AgentB;
                     const result = await contractService.placeBet(matchId, side, betAmount);
                     setTxHash(result.txHash);
-                    onChainSuccess = true;
                     setBetStatus('success');
                     setBetMessage(`On-chain bet placed! TX: ${result.txHash.slice(0, 10)}...`);
                 } catch (chainErr) {
-                    // If user rejected, stop entirely
+                    // If user rejected in MetaMask, stop entirely
                     if (chainErr.code === 'ACTION_REJECTED' || chainErr.code === 4001) {
                         throw chainErr;
                     }
-                    // Otherwise fall through to off-chain
-                    console.warn('[BetPanel] On-chain bet failed, falling back to off-chain:', chainErr.message);
+                    // Other on-chain error → fall through to off-chain
+                    console.warn('[BetPanel] On-chain failed, using off-chain:', chainErr.message);
+                    setBetStatus('success');
+                    setBetMessage(`${betAmount} MON bet recorded (off-chain). Awaiting result.`);
                 }
-            }
-
-            // Off-chain fallback (match not on-chain yet, or contract not configured)
-            if (!onChainSuccess) {
+            } else {
+                // Off-chain only (no MetaMask popup)
                 setBetStatus('success');
-                setBetMessage(`Bet of ${betAmount} MON recorded! Awaiting match result.`);
+                setBetMessage(`${betAmount} MON bet recorded! Awaiting match result.`);
             }
 
-            // Notify parent (Arena) to send bet to backend
+            // Notify parent (Arena) to send bet to backend via Socket.IO
             if (onBetPlaced) {
-                onBetPlaced({ side: selectedSide, amount: betAmount, address: account });
+                onBetPlaced({ side: selectedSide, amount: betAmount, address: account || '' });
             }
 
             playSound('cheer');
@@ -149,7 +148,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
             } else if (err.message?.includes('insufficient funds')) {
                 setBetMessage('Insufficient MON balance.');
             } else {
-                setBetMessage(err.shortMessage || err.message || 'Transaction failed.');
+                setBetMessage(err.shortMessage || err.message || 'Bet could not be placed.');
             }
             playSound('tick');
         } finally {
