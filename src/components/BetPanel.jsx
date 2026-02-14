@@ -105,7 +105,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
 
         try {
             const matchId = match.id || match.matchId || 'match-0';
-            const isOnChain = match.onChain && contractReady;
+            const isOnChain = Boolean(match.onChain && match.onChainTxHash && contractReady);
 
             // Only try on-chain if the match is actually on-chain AND contract is ready
             if (isOnChain) {

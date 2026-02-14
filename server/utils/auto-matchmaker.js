@@ -103,14 +103,23 @@ class AutoMatchmaker {
             bets: [],
             createdAt: Date.now(),
             isSimulated: agent1.isSimulated && agent2.isSimulated,
+            onChain: false,
+            onChainTxHash: null,
         };
 
         // Try to create match on-chain (NON-BLOCKING — never delay match start)
-        this.currentMatch.onChain = false;
         blockchain.createMatchOnChain(matchId, agent1.name, agent2.name)
-            .then(() => {
+            .then((txHash) => {
+                if (!this.currentMatch || this.currentMatch.id !== matchId) return;
+                if (!txHash) {
+                    logger.warn(`[AutoMatchmaker] Match ${matchId} could not be created on-chain; keeping off-chain mode`);
+                    return;
+                }
+
                 this.currentMatch.onChain = true;
-                logger.info(`[AutoMatchmaker] Match ${matchId} created on-chain`);
+                this.currentMatch.onChainTxHash = txHash;
+                this.io.emit('match:update', this.currentMatch);
+                logger.info(`[AutoMatchmaker] Match ${matchId} created on-chain`, { txHash });
             })
             .catch(err => {
                 logger.warn(`[AutoMatchmaker] On-chain match creation failed: ${err.message}`);
@@ -229,8 +238,9 @@ class AutoMatchmaker {
         // Resolve match on-chain (truly NON-BLOCKING — fire and forget)
         if (this.currentMatch.onChain) {
             const mId = this.currentMatch.id;
-            const wSide = winnerId === '1' ? 1 : 2;
-            blockchain.resolveMatchOnChain(mId, wSide)
+            const winnerAgentId = winnerId === '1' ? a1.id : a2.id;
+            const agent1Id = a1.id;
+            blockchain.resolveMatchOnChain(mId, winnerAgentId, agent1Id)
                 .then(() => logger.info(`[AutoMatchmaker] Match ${mId} resolved on-chain, winner: ${winner.name}`))
                 .catch(err => logger.warn(`[AutoMatchmaker] On-chain resolve failed: ${err.message}`));
         }
