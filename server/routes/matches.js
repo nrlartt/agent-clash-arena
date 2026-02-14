@@ -155,11 +155,12 @@ router.post('/:id/action', authAgent, (req, res) => {
 });
 
 // ── GET /matches/:id — Get match state (public) ──────────────
-router.get('/:id', (req, res) => {
-    const match = db.getMatchById(req.params.id);
+router.get('/:id', async (req, res) => {
+    const match = await db.getMatchById(req.params.id);
     if (!match) {
         // Check history
-        const hist = db.getMatchHistory().find(h => h.matchId === req.params.id);
+        const history = await db.getMatchHistory();
+        const hist = history.find(h => h.matchId === req.params.id);
         if (hist) return res.json({ success: true, data: hist, completed: true });
         return res.status(404).json({ success: false, error: 'Match not found' });
     }

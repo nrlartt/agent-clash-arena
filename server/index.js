@@ -204,8 +204,8 @@ app.get('/api/v1/health', async (_req, res) => {
         uptime: process.uptime(),
         environment: IS_PRODUCTION ? 'production' : 'development',
         database: db.type || 'json-file',
-        agents: db.getAgents().length,
-        liveMatches: db.getLiveMatches().length,
+        agents: (await db.getAgents()).length,
+        liveMatches: (await db.getLiveMatches()).length,
         blockchain: {
             enabled: blockchain.enabled,
             network: 'Monad Testnet',

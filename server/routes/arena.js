@@ -74,7 +74,8 @@ router.get('/heartbeat', authAgent, (req, res) => {
     db.updateAgent(agent.id, { lastHeartbeat: Date.now() });
 
     // Check for pending matches
-    const pendingMatch = db.getLiveMatches().find(
+    const liveMatches = await db.getLiveMatches();
+    const pendingMatch = liveMatches.find(
         m => m.agent1Id === agent.id || m.agent2Id === agent.id
     );
 
@@ -134,7 +135,8 @@ router.post('/queue', authAgent, (req, res) => {
     }
 
     // Check if in a match
-    const existingMatch = db.getLiveMatches().find(
+    const currentLiveMatches = await db.getLiveMatches();
+    const existingMatch = currentLiveMatches.find(
         m => m.agent1Id === agent.id || m.agent2Id === agent.id
     );
     if (existingMatch) {

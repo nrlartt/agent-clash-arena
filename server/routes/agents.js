@@ -224,7 +224,8 @@ router.get('/verify-claim/:token', (req, res) => {
         return res.status(400).json({ success: false, error: 'Invalid token format' });
     }
 
-    const agent = db.getAgents().find(a => a.claimToken === token);
+    const allAgents = await db.getAgents();
+    const agent = allAgents.find(a => a.claimToken === token);
     
     if (!agent) {
         return res.status(404).json({ success: false, error: 'Claim token not found or expired' });
@@ -271,7 +272,8 @@ router.post('/claim', (req, res) => {
         });
     }
 
-    const agent = db.getAgents().find(a => a.claimToken === claim_token);
+    const allAgentsForClaim = await db.getAgents();
+    const agent = allAgentsForClaim.find(a => a.claimToken === claim_token);
     if (!agent) {
         return res.status(404).json({
             success: false,
@@ -287,7 +289,7 @@ router.post('/claim', (req, res) => {
     }
 
     // Check if wallet already owns another agent (1 agent per wallet)
-    const existingOwner = db.getAgents().find(
+    const existingOwner = allAgentsForClaim.find(
         a => a.owner && a.owner.walletAddress && 
         a.owner.walletAddress.toLowerCase() === wallet_address.toLowerCase() &&
         a.status !== 'pending_claim'
@@ -428,8 +430,8 @@ router.get('/me/matches', authAgent, (req, res) => {
 });
 
 // ── GET /agents — List all agents (public) ───────────────────
-router.get('/', (req, res) => {
-    const agents = db.getAgents().map(a => ({
+router.get('/', async (req, res) => {
+    const agents = (await db.getAgents()).map(a => ({
         id: a.id,
         name: a.name,
         description: a.description,
