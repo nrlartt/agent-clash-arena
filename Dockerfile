@@ -58,9 +58,8 @@ ENV PORT=3001
 
 EXPOSE ${PORT}
 
-# Health check (uses $PORT which Railway overrides)
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/api/v1/health || exit 1
+# Note: Railway uses its own healthcheck from railway.json
+# No Docker HEALTHCHECK needed — it conflicts with Railway's networking probe
 
 # Start
 CMD ["node", "server/index.js"]
