@@ -11,7 +11,7 @@ import './BetPanel.css';
 
 const QUICK_AMOUNTS = [0.01, 0.05, 0.1, 0.5, 1];
 
-export default function BetPanel({ match, walletConnected = false, disabled = false, timer = null }) {
+export default function BetPanel({ match, walletConnected = false, disabled = false, timer = null, onBetPlaced = null }) {
     const [selectedSide, setSelectedSide] = useState(null);
     const [betAmount, setBetAmount] = useState('');
     const [isPlacing, setIsPlacing] = useState(false);
@@ -130,6 +130,11 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
             if (!onChainSuccess) {
                 setBetStatus('success');
                 setBetMessage(`Bet of ${betAmount} MON recorded! Awaiting match result.`);
+            }
+
+            // Notify parent (Arena) to send bet to backend
+            if (onBetPlaced) {
+                onBetPlaced({ side: selectedSide, amount: betAmount, address: account });
             }
 
             playSound('cheer');

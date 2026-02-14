@@ -9,11 +9,12 @@ import {
     Activity, Radio, ChevronRight, Swords, BarChart3,
     Users, ArrowUpRight, Sparkles, Shield, Target, Timer
 } from 'lucide-react';
+import { io as socketIO } from 'socket.io-client';
 import { useWallet } from '../context/WalletContext';
 import GameCanvas from '../components/GameCanvas';
 import BetPanel from '../components/BetPanel';
 import LiveChat from '../components/LiveChat';
-import { MATCHES, PLATFORM_STATS, AGENTS } from '../data/mockData';
+import { PLATFORM_STATS, AGENTS } from '../data/mockData';
 import { calculateEquipmentBonus } from '../data/inventory';
 import { useInventory } from '../context/InventoryContext';
 import { playSound } from '../utils/audio';
@@ -21,23 +22,21 @@ import './Arena.css';
 
 // ── API Config ──
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
-const WS_URL = API_URL.replace('/api/v1', '').replace('http', 'ws');
-const HTTP_URL = API_URL.replace('/api/v1', '').replace('ws', 'http');
+const SOCKET_URL = API_URL.replace('/api/v1', '') || window.location.origin;
 
 export default function Arena() {
-    // ── Game Loop State ──
+    // ── Game Loop State (driven by backend matchmaker) ──
     const [gameState, setGameState] = useState('WAITING');
-    const [timeLeft, setTimeLeft] = useState(10);
-    const [matchQueue, setMatchQueue] = useState(MATCHES);
-    const [currentMatch, setCurrentMatch] = useState(MATCHES[0]);
+    const [timeLeft, setTimeLeft] = useState(0);
+    const [currentMatch, setCurrentMatch] = useState(null);
 
-    // ── Simulation State ──
+    // ── Simulation State (for GameCanvas) ──
     const [liveAgentState, setLiveAgentState] = useState(null);
     const [liveMatchState, setLiveMatchState] = useState(null);
     const [matchResult, setMatchResult] = useState(null);
     const [matchKey, setMatchKey] = useState(0);
 
-    // ── Live Data State (from backend) ──
+    // ── Live Data State ──
     const [liveStats, setLiveStats] = useState({
         viewers: PLATFORM_STATS.onlineViewers,
         totalBetsToday: PLATFORM_STATS.totalMONWagered,
@@ -51,168 +50,121 @@ export default function Arena() {
 
     const { account } = useWallet();
     const { inventories } = useInventory();
-    const wsRef = useRef(null);
+    const socketRef = useRef(null);
     const activityFeedRef = useRef(null);
 
-    // ── WebSocket Connection ──
+    // ── Socket.IO Connection to Backend Matchmaker ──
     useEffect(() => {
-        let ws;
-        let reconnectTimer;
+        const socket = socketIO(SOCKET_URL, {
+            transports: ['websocket', 'polling'],
+            reconnectionDelay: 2000,
+            reconnectionAttempts: Infinity,
+        });
+        socketRef.current = socket;
 
-        const connect = () => {
-            try {
-                ws = new WebSocket(HTTP_URL.replace('http', 'ws'));
-                wsRef.current = ws;
+        socket.on('connect', () => {
+            setWsConnected(true);
+            console.log('[Socket.IO] Connected to Arena');
+        });
 
-                ws.onopen = () => {
-                    setWsConnected(true);
-                    console.log('[WS] Connected to Arena');
-                };
+        socket.on('disconnect', () => {
+            setWsConnected(false);
+        });
 
-                ws.onclose = () => {
-                    setWsConnected(false);
-                    reconnectTimer = setTimeout(connect, 3000);
-                };
+        // ── Match phase updates from backend matchmaker ──
+        socket.on('match:phase', (data) => {
+            const { phase, match, timeLeft: tl, result } = data;
 
-                ws.onerror = () => {
-                    setWsConnected(false);
-                };
-
-                ws.onmessage = () => {};
-            } catch (e) {
-                console.warn('[WS] Connection failed, using polling');
+            if (match) {
+                setCurrentMatch(match);
             }
-        };
 
-        // Use Socket.IO-like events via EventSource or polling
-        // Since backend uses Socket.IO, we'll use polling for simplicity
-        const pollInterval = setInterval(async () => {
-            try {
-                const [statsRes, resultsRes] = await Promise.all([
-                    fetch(`${API_URL}/arena/live-stats`),
-                    fetch(`${API_URL}/arena/recent-results`),
-                ]);
-                if (statsRes.ok) {
-                    const statsData = await statsRes.json();
-                    if (statsData.success) {
-                        setLiveStats(statsData.data);
-                    }
-                }
-                if (resultsRes.ok) {
-                    const resultsData = await resultsRes.json();
-                    if (resultsData.success) {
-                        setRecentResults(resultsData.data);
-                    }
-                }
-                setWsConnected(true);
-            } catch {
-                setWsConnected(false);
+            if (phase === 'BETTING') {
+                setGameState('BETTING');
+                setTimeLeft(tl || 30);
+                setMatchResult(null);
+                setLiveAgentState(null);
+                setLiveMatchState(null);
+                setMatchKey(k => k + 1);
+            } else if (phase === 'FIGHTING') {
+                setGameState('LIVE');
+            } else if (phase === 'RESULT') {
+                if (result) setMatchResult(result);
+                setGameState('FINISHED');
+                setTimeLeft(10);
+                setMatchCount(c => c + 1);
+            } else if (phase === 'COOLDOWN') {
+                setGameState('WAITING');
+                setTimeLeft(5);
             }
-        }, 3000);
+        });
 
-        // Initial fetch
-        (async () => {
-            try {
-                const res = await fetch(`${API_URL}/arena/live-stats`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.success) setLiveStats(data.data);
-                    setWsConnected(true);
-                }
-            } catch { /* ignore */ }
-        })();
+        // New match announced
+        socket.on('match:new', (match) => {
+            setCurrentMatch(match);
+        });
+
+        // Match data updated (bets changed)
+        socket.on('match:update', (match) => {
+            setCurrentMatch(match);
+        });
+
+        // Betting timer countdown
+        socket.on('match:timer', ({ timeLeft: tl }) => {
+            setTimeLeft(tl);
+        });
+
+        // Fight events (hits, combos, etc.)
+        socket.on('match:fight_event', (event) => {
+            setActivityFeed(prev => [
+                { ...event, id: Date.now() + Math.random(), timestamp: Date.now() },
+                ...prev,
+            ].slice(0, 30));
+        });
+
+        // Match result
+        socket.on('match:result', (result) => {
+            setRecentResults(prev => [result, ...prev].slice(0, 10));
+        });
+
+        // Match history on initial connect
+        socket.on('match:history', (history) => {
+            setRecentResults(history);
+        });
+
+        // Live stats from backend
+        socket.on('arena:live_stats', (stats) => {
+            setLiveStats(prev => ({ ...prev, ...stats }));
+        });
+
+        // Live activity events from backend
+        socket.on('arena:live_event', (event) => {
+            setActivityFeed(prev => [
+                { ...event, id: Date.now() + Math.random(), timestamp: Date.now() },
+                ...prev,
+            ].slice(0, 30));
+        });
 
         return () => {
-            clearInterval(pollInterval);
-            clearTimeout(reconnectTimer);
-            if (ws) ws.close();
+            socket.disconnect();
         };
     }, []);
 
-    // ── Simulated Activity Feed (client-side, enhanced) ──
+    // ── Countdown timer for WAITING and FINISHED states ──
     useEffect(() => {
-        const agentList = liveStats.agents || AGENTS;
-        const eventTypes = [
-            (a) => ({ icon: '💰', text: `${['0xCafe...', '0xDead...', '0xBabe...', '0x1337...', '0xF00d...', '0xAce1...'][Math.floor(Math.random() * 6)]} bet ${[25, 50, 100, 250, 500, 1000, 2500][Math.floor(Math.random() * 7)]} MON on ${a.name}`, color: '#FFE93E', type: 'bet' }),
-            (a) => ({ icon: '💥', text: `${a.name} landed a CRITICAL HIT!`, color: '#FF2D78', type: 'hit' }),
-            (a) => ({ icon: '⚡', text: `${a.name} hit a ${Math.floor(Math.random() * 4 + 3)}x COMBO!`, color: '#00F5FF', type: 'combo' }),
-            (a) => ({ icon: '🌟', text: `${a.name} unleashed SPECIAL MOVE!`, color: '#836EF9', type: 'special' }),
-            (a) => ({ icon: '💨', text: `${a.name} dodged a lethal blow!`, color: '#69D2E7', type: 'dodge' }),
-            (a) => ({ icon: '🔥', text: `${a.name} is on a ${Math.floor(Math.random() * 5 + 3)}-win streak!`, color: '#FF6B35', type: 'streak' }),
-            () => ({ icon: '👁️', text: `${Math.floor(Math.random() * 80 + 20)} new viewers joined`, color: '#00F5FF', type: 'viewers' }),
-            () => ({ icon: '🎮', text: `${Math.floor(Math.random() * 30 + 5)} bets placed this minute`, color: '#836EF9', type: 'bets' }),
-            (a) => ({ icon: '📋', text: `${a.name} joined matchmaking queue`, color: '#39FF14', type: 'queue' }),
-            (a) => ({ icon: '💓', text: `${a.name} heartbeat — online`, color: '#2ECC71', type: 'heartbeat' }),
-        ];
-
-        const interval = setInterval(() => {
-            const agent = agentList[Math.floor(Math.random() * Math.min(agentList.length, 8))];
-            const template = eventTypes[Math.floor(Math.random() * eventTypes.length)];
-            const event = { ...template(agent || { name: 'Unknown' }), id: Date.now() + Math.random(), timestamp: Date.now() };
-
-            setActivityFeed(prev => {
-                const next = [event, ...prev];
-                return next.slice(0, 30);
-            });
-        }, 2000 + Math.floor(Math.random() * 2000));
-
-        return () => clearInterval(interval);
-    }, [liveStats.agents]);
+        if (gameState === 'WAITING' || gameState === 'FINISHED') {
+            const interval = setInterval(() => {
+                setTimeLeft(prev => Math.max(0, prev - 1));
+            }, 1000);
+            return () => clearInterval(interval);
+        }
+    }, [gameState]);
 
     // ── Sound Effects ──
     useEffect(() => {
         if (gameState === 'LIVE') playSound('bell');
         else if (gameState === 'FINISHED') playSound('cheer');
     }, [gameState]);
-
-    useEffect(() => {
-        if (liveMatchState?.currentRound > 1) playSound('round');
-    }, [liveMatchState?.currentRound]);
-
-    // ── Timer Ref for stale closure fix ──
-    const gameStateRef = useRef(gameState);
-    useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
-
-    const handleTimerComplete = useCallback(() => {
-        const currentState = gameStateRef.current;
-        if (currentState === 'WAITING') {
-            setGameState('BETTING');
-            setTimeLeft(30);
-        } else if (currentState === 'BETTING') {
-            setGameState('LIVE');
-        } else if (currentState === 'FINISHED') {
-            setMatchResult(null);
-            setLiveAgentState(null);
-            setLiveMatchState(null);
-            setMatchQueue(prevQueue => {
-                const nextQueue = [...prevQueue];
-                const oldMatch = nextQueue.shift();
-                nextQueue.push(oldMatch);
-                setCurrentMatch(nextQueue[0]);
-                return nextQueue;
-            });
-            setMatchKey(k => k + 1);
-            setMatchCount(c => c + 1);
-            setGameState('WAITING');
-            setTimeLeft(8);
-        }
-    }, []);
-
-    useEffect(() => {
-        let interval;
-        if (gameState !== 'LIVE') {
-            interval = setInterval(() => {
-                setTimeLeft((prev) => {
-                    if (prev <= 1) {
-                        setTimeout(handleTimerComplete, 0);
-                        return 0;
-                    }
-                    return prev - 1;
-                });
-            }, 1000);
-        }
-        return () => clearInterval(interval);
-    }, [gameState, handleTimerComplete]);
 
     // ── Canvas Callbacks ──
     const handleStateUpdate = useCallback((update) => {
@@ -235,7 +187,7 @@ export default function Arena() {
     }, []);
 
     // ── Computed ──
-    const upcomingMatches = matchQueue.slice(1, 8);
+    const upcomingMatches = recentResults.slice(0, 4);
     const winnerAgent = matchResult
         ? (matchResult.winner === '1' ? currentMatch.agent1 : currentMatch.agent2)
         : null;
@@ -563,6 +515,11 @@ export default function Arena() {
                         walletConnected={!!account}
                         disabled={gameState !== 'BETTING'}
                         timer={gameState === 'BETTING' ? timeLeft : null}
+                        onBetPlaced={(bet) => {
+                            if (socketRef.current) {
+                                socketRef.current.emit('match:bet', bet);
+                            }
+                        }}
                     />
 
                     {/* Mini Leaderboard */}

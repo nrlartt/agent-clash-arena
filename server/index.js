@@ -302,31 +302,58 @@ io.use((socket, next) => {
     next();
 });
 
+// ── Auto Matchmaker (creates matches automatically) ──────────
+const AutoMatchmaker = require('./utils/auto-matchmaker');
+const matchmaker = new AutoMatchmaker(io);
+
 io.on('connection', (socket) => {
     logger.info(`WS client connected`, { socketId: socket.id, authenticated: !!socket.authToken });
+
+    // Send current matchmaker state immediately
+    const state = matchmaker.getState();
+    if (state.match) {
+        socket.emit('match:phase', {
+            phase: state.phase,
+            match: state.match,
+            timeLeft: state.bettingTimeLeft,
+        });
+    }
+    // Send recent match history
+    if (state.matchHistory.length > 0) {
+        socket.emit('match:history', state.matchHistory);
+    }
 
     // Join match room for live updates
     socket.on('match:watch', (matchId) => {
         socket.join(`match:${matchId}`);
         logger.debug(`WS watching match`, { socketId: socket.id, matchId });
 
-        // Send current match state
         const match = db.getMatchById(matchId);
         if (match) {
             socket.emit('match:state', match);
         }
     });
 
-    // Leave match room
     socket.on('match:unwatch', (matchId) => {
         socket.leave(`match:${matchId}`);
     });
 
-    // Get live matches
+    // Record bet from frontend
+    socket.on('match:bet', (data) => {
+        const { side, amount, address } = data || {};
+        if (!side || !amount) return;
+        const bet = matchmaker.recordBet(side, amount, address);
+        if (bet) {
+            logger.info(`Bet recorded: ${amount} MON on side ${side}`, { address, matchId: matchmaker.currentMatch?.id });
+        }
+    });
+
     socket.on('arena:status', () => {
         socket.emit('arena:status', {
             liveMatches: db.getLiveMatches(),
             queueSize: require('./routes/arena')._matchQueue?.length || 0,
+            currentMatch: matchmaker.currentMatch,
+            phase: matchmaker.phase,
         });
     });
 
@@ -439,4 +466,7 @@ server.listen(PORT, async () => {
         logger.warn(`DB not ready yet: ${e.message}`);
     }
     logger.info('═══════════════════════════════════════════════');
+
+    // Start auto matchmaker after server is ready
+    matchmaker.start();
 });
