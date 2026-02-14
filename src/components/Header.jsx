@@ -27,15 +27,12 @@ export default function Header() {
         formattedBalance,
         isMonad,
         isConnecting,
-        isInstalled,
         error,
         connect,
         connectCircle,
         disconnect,
         switchToMonad,
     } = useWallet();
-
-    const liveCount = 1834 + Math.floor(Math.random() * 50);
 
     return (
         <header className="header">
@@ -69,12 +66,6 @@ export default function Header() {
 
                 {/* Right Actions */}
                 <div className="header__actions">
-                    {/* Live Indicator */}
-                    <div className="header__live-badge" id="live-badge">
-                        <span className="status-dot status-dot--live" />
-                        <span className="header__live-label">{liveCount.toLocaleString()} WATCHING</span>
-                    </div>
-
                     {/* Wallet Section */}
                     {account ? (
                         <div className="header__wallet-connected" id="wallet-connected">

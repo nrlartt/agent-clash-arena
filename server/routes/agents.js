@@ -6,11 +6,43 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { authAgent } = require('../middleware/auth');
 const db = require('../db');
+const {
+    AgentWalletError,
+    createAgentWalletRecord,
+    exportAgentWalletKeyPackage,
+    generateOneTimeWalletSecret,
+} = require('../utils/agent-wallet');
 
 const router = express.Router();
 
 const STRATEGIES = ['aggressive', 'defensive', 'balanced'];
 const WEAPONS = ['blade', 'mace', 'scythe', 'whip', 'lance', 'hammer', 'axe', 'fist'];
+
+function toSafeAgentView(agent) {
+    return {
+        id: agent.id,
+        name: agent.name,
+        description: agent.description,
+        strategy: agent.strategy,
+        weaponPreference: agent.weaponPreference,
+        status: agent.status,
+        rank: agent.rank,
+        level: agent.level,
+        xp: agent.xp,
+        powerRating: agent.powerRating,
+        stats: agent.stats,
+        registeredAt: agent.registeredAt,
+        claimedAt: agent.claimedAt,
+        lastHeartbeat: agent.lastHeartbeat,
+        battleCry: agent.battleCry,
+        wallet: agent.wallet ? { address: agent.wallet.address } : null,
+        owner: agent.owner ? {
+            twitterHandle: agent.owner.twitterHandle,
+            walletAddress: agent.owner.walletAddress,
+            verified: agent.owner.verified,
+        } : null,
+    };
+}
 
 // ── POST /agents/register — Self-registration (no auth) ──────
 router.post('/register', (req, res) => {
@@ -44,6 +76,18 @@ router.post('/register', (req, res) => {
     const apiKey = `aca_${uuidv4().replace(/-/g, '').slice(0, 24)}`;
     const claimToken = `aca_claim_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
     const verificationCode = `arena-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    let walletRecord;
+    let walletSecret;
+
+    try {
+        walletRecord = createAgentWalletRecord();
+        walletSecret = generateOneTimeWalletSecret();
+    } catch (error) {
+        return res.status(error instanceof AgentWalletError ? 503 : 500).json({
+            success: false,
+            error: 'Agent wallet could not be created. Check server wallet encryption config.',
+        });
+    }
 
     const agent = {
         id,
@@ -65,7 +109,18 @@ router.post('/register', (req, res) => {
         claimedAt: null,
         lastHeartbeat: null,
         battleCry: null,
+        wallet: walletRecord,
     };
+
+    let walletKeyPackage;
+    try {
+        walletKeyPackage = exportAgentWalletKeyPackage(agent, walletSecret);
+    } catch {
+        return res.status(500).json({
+            success: false,
+            error: 'Agent wallet export could not be generated',
+        });
+    }
 
     db.addAgent(agent);
 
@@ -85,39 +140,43 @@ router.post('/register', (req, res) => {
             api_key: agent.apiKey,
             claim_url: `https://agentclasharena.com/claim/${claimToken}`,
             verification_code: verificationCode,
+            wallet_address: walletRecord.address,
+            wallet_key_export: walletKeyPackage,
+            wallet_secret: walletSecret,
         },
-        important: '⚠️ SAVE YOUR API KEY! You need it for all arena operations.',
+        important: 'Save API key, wallet_secret and wallet_key_export now. wallet_secret is shown only once.',
     });
 });
 
 // ── GET /agents/me — Get own profile (authed) ────────────────
 router.get('/me', authAgent, (req, res) => {
-    const agent = req.agent;
-    res.json({
-        success: true,
-        data: {
-            id: agent.id,
-            name: agent.name,
-            description: agent.description,
-            strategy: agent.strategy,
-            weaponPreference: agent.weaponPreference,
-            status: agent.status,
-            rank: agent.rank,
-            level: agent.level,
-            xp: agent.xp,
-            powerRating: agent.powerRating,
-            stats: agent.stats,
-            registeredAt: agent.registeredAt,
-            claimedAt: agent.claimedAt,
-            lastHeartbeat: agent.lastHeartbeat,
-            battleCry: agent.battleCry,
-            owner: agent.owner ? {
-                twitterHandle: agent.owner.twitterHandle,
-                walletAddress: agent.owner.walletAddress,
-                verified: agent.owner.verified,
-            } : null,
-        },
-    });
+    res.json({ success: true, data: toSafeAgentView(req.agent) });
+});
+
+router.post('/me/wallet/export', authAgent, (req, res) => {
+    const secretToken = String(req.body && req.body.secret_token || '').trim();
+    if (secretToken.length < 16) {
+        return res.status(400).json({
+            success: false,
+            error: 'secret_token is required and must be at least 16 chars',
+        });
+    }
+
+    try {
+        const walletKeyPackage = exportAgentWalletKeyPackage(req.agent, secretToken);
+        return res.json({
+            success: true,
+            data: {
+                wallet_address: req.agent.wallet && req.agent.wallet.address ? req.agent.wallet.address : null,
+                wallet_key_export: walletKeyPackage,
+            },
+        });
+    } catch (error) {
+        return res.status(error instanceof AgentWalletError ? 400 : 500).json({
+            success: false,
+            error: error instanceof AgentWalletError ? error.message : 'Wallet export failed',
+        });
+    }
 });
 
 // ── GET /agents/status — Check registration/claim status ─────
@@ -154,7 +213,7 @@ router.patch('/me/profile', authAgent, (req, res) => {
     if (avatar_emoji !== undefined) updates.avatar = String(avatar_emoji).slice(0, 4);
 
     const updated = db.updateAgent(req.agent.id, updates);
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: toSafeAgentView(updated) });
 });
 
 // ── GET /agents/verify-claim/:token — Check if claim token is valid ──

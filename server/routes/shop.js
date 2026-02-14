@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const { authAgent } = require('../middleware/auth');
 
 const {
     ShopError,
@@ -7,11 +8,17 @@ const {
     getShopConfig,
     listOwnedAgents,
     getAgentInventoryForOwner,
+    getAgentInventoryForApiKey,
     createShopOrder,
+    createAgentShopOrder,
     getOrderForWallet,
+    getOrderForAgent,
     confirmOrderPayment,
+    payShopOrderFromAgentWallet,
     equipBackpackItem,
+    equipBackpackItemForAgent,
     unequipSlot,
+    unequipSlotForAgent,
 } = require('../utils/shop-service');
 
 const router = express.Router();
@@ -78,6 +85,15 @@ router.get('/inventory/:agentId', (req, res) => {
     }
 });
 
+router.get('/agent/inventory', authAgent, (req, res) => {
+    try {
+        const data = getAgentInventoryForApiKey(req.agent.apiKey);
+        return res.json({ success: true, data });
+    } catch (error) {
+        return handleShopError(res, error);
+    }
+});
+
 router.post('/orders', async (req, res) => {
     try {
         const { agent_id, item_id, wallet_address, buy_and_equip } = req.body;
@@ -99,10 +115,34 @@ router.post('/orders', async (req, res) => {
     }
 });
 
+router.post('/agent/orders', authAgent, async (req, res) => {
+    try {
+        const { item_id, buy_and_equip } = req.body;
+        const result = await createAgentShopOrder({
+            agentApiKey: req.agent.apiKey,
+            itemId: item_id,
+            buyAndEquip: !!buy_and_equip,
+            ipAddress: req.ip,
+        });
+        return res.status(201).json({ success: true, data: result });
+    } catch (error) {
+        return handleShopError(res, error);
+    }
+});
+
 router.get('/orders/:orderId', (req, res) => {
     try {
         const walletAddress = req.query.wallet_address;
         const data = getOrderForWallet(req.params.orderId, walletAddress);
+        return res.json({ success: true, data });
+    } catch (error) {
+        return handleShopError(res, error);
+    }
+});
+
+router.get('/agent/orders/:orderId', authAgent, (req, res) => {
+    try {
+        const data = getOrderForAgent(req.params.orderId, req.agent.apiKey);
         return res.json({ success: true, data });
     } catch (error) {
         return handleShopError(res, error);
@@ -125,6 +165,19 @@ router.post('/orders/:orderId/confirm', async (req, res) => {
     }
 });
 
+router.post('/orders/:orderId/agent-pay', authAgent, async (req, res) => {
+    try {
+        const data = await payShopOrderFromAgentWallet({
+            orderId: req.params.orderId,
+            agentApiKey: req.agent.apiKey,
+            io: req.io || null,
+        });
+        return res.json({ success: true, data });
+    } catch (error) {
+        return handleShopError(res, error);
+    }
+});
+
 router.post('/inventory/:agentId/equip', (req, res) => {
     try {
         const { wallet_address, item_id } = req.body;
@@ -139,12 +192,38 @@ router.post('/inventory/:agentId/equip', (req, res) => {
     }
 });
 
+router.post('/agent/inventory/equip', authAgent, (req, res) => {
+    try {
+        const { item_id } = req.body;
+        const inventory = equipBackpackItemForAgent({
+            agentApiKey: req.agent.apiKey,
+            itemId: item_id,
+        });
+        return res.json({ success: true, data: inventory });
+    } catch (error) {
+        return handleShopError(res, error);
+    }
+});
+
 router.post('/inventory/:agentId/unequip', (req, res) => {
     try {
         const { wallet_address, slot } = req.body;
         const inventory = unequipSlot({
             agentId: req.params.agentId,
             walletAddress: wallet_address,
+            slot,
+        });
+        return res.json({ success: true, data: inventory });
+    } catch (error) {
+        return handleShopError(res, error);
+    }
+});
+
+router.post('/agent/inventory/unequip', authAgent, (req, res) => {
+    try {
+        const { slot } = req.body;
+        const inventory = unequipSlotForAgent({
+            agentApiKey: req.agent.apiKey,
             slot,
         });
         return res.json({ success: true, data: inventory });

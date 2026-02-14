@@ -51,11 +51,11 @@ class MongoDatabase {
     }
 
     async getAgentById(id) {
-        return await Agent.findById(id).lean();
+        return await Agent.findById(id).select('+wallet.encryptedPrivateKey').lean();
     }
 
     async getAgentByApiKey(apiKey) {
-        return await Agent.findOne({ apiKey }).lean();
+        return await Agent.findOne({ apiKey }).select('+wallet.encryptedPrivateKey').lean();
     }
 
     async getAgentByName(name) {

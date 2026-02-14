@@ -5,6 +5,12 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { sendTelegramMessage } = require('../utils/telegram');
 const {
+    AgentWalletError,
+    createAgentWalletRecord,
+    exportAgentWalletKeyPackage,
+    generateOneTimeWalletSecret,
+} = require('../utils/agent-wallet');
+const {
     ShopError,
     parseTelegramPayCommand,
     confirmOrderPaymentByToken,
@@ -52,6 +58,18 @@ function registerAgentFromTelegram({ username, firstName, chatId }) {
     const apiKey = `aca_${uuidv4().replace(/-/g, '').slice(0, 24)}`;
     const claimToken = `aca_claim_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
     const verificationCode = `arena-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    let walletRecord;
+    let walletSecret;
+
+    try {
+        walletRecord = createAgentWalletRecord();
+        walletSecret = generateOneTimeWalletSecret();
+    } catch (error) {
+        throw new AgentWalletError(
+            error instanceof AgentWalletError ? error.message : 'Agent wallet initialization failed',
+            error instanceof AgentWalletError ? error.code : 'wallet_init_failed'
+        );
+    }
 
     const agent = {
         id,
@@ -73,12 +91,15 @@ function registerAgentFromTelegram({ username, firstName, chatId }) {
         claimedAt: null,
         lastHeartbeat: null,
         battleCry: null,
+        wallet: walletRecord,
         onboarding: {
             source: 'telegram',
             telegramUsername: username || null,
             telegramChatId: String(chatId || ''),
         },
     };
+
+    const walletKeyPackage = exportAgentWalletKeyPackage(agent, walletSecret);
 
     db.addAgent(agent);
     db.addActivity({
@@ -92,6 +113,8 @@ function registerAgentFromTelegram({ username, firstName, chatId }) {
         duplicate: false,
         agent,
         claimUrl: `https://agentclasharena.com/claim/${claimToken}`,
+        walletSecret,
+        walletKeyPackage,
     };
 }
 
@@ -170,7 +193,17 @@ router.post('/webhook', telegramLimiter, async (req, res) => {
         return res.json({ success: true, ignored: true, reason: 'unknown_command' });
     }
 
-    const result = registerAgentFromTelegram({ username, firstName, chatId });
+    let result;
+    try {
+        result = registerAgentFromTelegram({ username, firstName, chatId });
+    } catch (error) {
+        const reason = error instanceof AgentWalletError
+            ? 'Wallet security config missing on server.'
+            : 'Registration failed.';
+        await sendTelegramMessage(chatId, reason);
+        return res.status(500).json({ success: false, error: reason });
+    }
+
     if (result.duplicate) {
         await sendTelegramMessage(chatId, `You already have a registration name reserved: ${result.name}`);
         return res.json({ success: true, duplicate: true, agent_name: result.name });
@@ -181,8 +214,11 @@ router.post('/webhook', telegramLimiter, async (req, res) => {
         `API Key: ${result.agent.apiKey}`,
         `Claim URL: ${result.claimUrl}`,
         `Verification Code: ${result.agent.verificationCode}`,
+        `Wallet Address: ${result.agent.wallet.address}`,
+        `Wallet Secret (save once): ${result.walletSecret}`,
+        `Wallet Key Export: ${JSON.stringify(result.walletKeyPackage)}`,
         '',
-        'Save your API key now. Share claim URL with the human owner.',
+        'Save API key + wallet secret/export now. Share claim URL with the human owner.',
     ].join('\n');
 
     await sendTelegramMessage(chatId, msg);
@@ -194,6 +230,9 @@ router.post('/webhook', telegramLimiter, async (req, res) => {
             name: result.agent.name,
             claim_url: result.claimUrl,
             verification_code: result.agent.verificationCode,
+            wallet_address: result.agent.wallet.address,
+            wallet_key_export: result.walletKeyPackage,
+            wallet_secret: result.walletSecret,
         },
     });
 });

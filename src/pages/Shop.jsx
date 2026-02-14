@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShoppingBag, Package, Check, ArrowRightLeft } from 'lucide-react';
+import { ShoppingBag, Package, Check, ArrowRightLeft, KeyRound, Wallet } from 'lucide-react';
 import { SHOP_ITEMS, RARITY, ITEM_CATEGORY, calculateEquipmentBonus } from '../data/inventory';
-import { useWallet } from '../context/WalletContext';
 import {
     getShopConfig,
-    getMyShopAgents,
-    getShopInventory,
-    createShopOrder,
-    getShopOrder,
-    confirmShopOrder,
-    equipShopItem,
-    unequipShopItem,
+    getAgentProfile,
+    getAgentShopInventory,
+    createAgentShopOrder,
+    getAgentShopOrder,
+    payShopOrderFromAgentWallet,
+    equipAgentShopItem,
+    unequipAgentShopItem,
 } from '../services/shopService';
 import './Shop.css';
 
@@ -24,6 +23,8 @@ const EMPTY_INVENTORY = {
     backpack: [],
     purchaseHistory: [],
 };
+
+const API_KEY_STORAGE_KEY = 'aca_shop_agent_api_key';
 
 function hydrateEntry(entry) {
     if (!entry || !entry.itemId) return null;
@@ -43,24 +44,31 @@ function hydrateInventory(raw) {
 }
 
 export default function Shop() {
-    const { account } = useWallet();
-    const [agents, setAgents] = useState([]);
-    const [agentId, setAgentId] = useState('');
-    const [inventory, setInventory] = useState(EMPTY_INVENTORY);
     const [config, setConfig] = useState(null);
+    const [agentApiKeyInput, setAgentApiKeyInput] = useState('');
+    const [agentApiKey, setAgentApiKey] = useState('');
+    const [agentProfile, setAgentProfile] = useState(null);
+    const [inventory, setInventory] = useState(EMPTY_INVENTORY);
     const [selectedItem, setSelectedItem] = useState(null);
     const [activeOrder, setActiveOrder] = useState(null);
     const [txHash, setTxHash] = useState('');
     const [toast, setToast] = useState(null);
     const [busy, setBusy] = useState(false);
 
-    const selectedAgent = useMemo(() => agents.find((a) => a.id === agentId) || null, [agents, agentId]);
     const equipped = useMemo(() => Object.values(inventory.equipped || {}).filter(Boolean), [inventory]);
     const bonus = useMemo(() => calculateEquipmentBonus(equipped), [equipped]);
-    const canOrder = Boolean(account && selectedAgent && config && config.payment_enabled);
+    const canOrder = Boolean(agentApiKey && agentProfile && config && config.payment_enabled);
     const orderForItem = activeOrder && selectedItem && activeOrder.item_id === selectedItem.id ? activeOrder : null;
 
     const pushToast = (type, message) => setToast({ type, message });
+
+    useEffect(() => {
+        const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+        if (savedKey) {
+            setAgentApiKey(savedKey);
+            setAgentApiKeyInput(savedKey);
+        }
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -71,38 +79,36 @@ export default function Shop() {
     }, []);
 
     useEffect(() => {
-        if (!account) {
-            setAgents([]);
-            setAgentId('');
+        if (!agentApiKey) {
+            setAgentProfile(null);
             setInventory(EMPTY_INVENTORY);
             return;
         }
+
         let cancelled = false;
-        getMyShopAgents(account)
-            .then((owned) => {
+        Promise.all([
+            getAgentProfile(agentApiKey),
+            getAgentShopInventory(agentApiKey),
+        ])
+            .then(([profile, shopData]) => {
                 if (cancelled) return;
-                setAgents(owned);
-                setAgentId((current) => current || (owned[0] ? owned[0].id : ''));
+                setAgentProfile(profile);
+                setInventory(hydrateInventory(shopData.inventory));
             })
-            .catch((error) => pushToast('error', error.message || 'Agents could not load.'));
+            .catch((error) => {
+                if (cancelled) return;
+                setAgentProfile(null);
+                setInventory(EMPTY_INVENTORY);
+                pushToast('error', error.message || 'Agent authentication failed.');
+            });
         return () => { cancelled = true; };
-    }, [account]);
+    }, [agentApiKey]);
 
     useEffect(() => {
-        if (!account || !agentId) {
-            setInventory(EMPTY_INVENTORY);
-            return;
-        }
-        getShopInventory(agentId, account)
-            .then((data) => setInventory(hydrateInventory(data)))
-            .catch((error) => pushToast('error', error.message || 'Inventory could not load.'));
-    }, [account, agentId]);
-
-    useEffect(() => {
-        if (!activeOrder || activeOrder.status !== 'pending_payment' || !account) return undefined;
+        if (!activeOrder || activeOrder.status !== 'pending_payment' || !agentApiKey) return undefined;
         const timer = setInterval(async () => {
             try {
-                const data = await getShopOrder(activeOrder.id, account);
+                const data = await getAgentShopOrder(activeOrder.id, agentApiKey);
                 setInventory(hydrateInventory(data.inventory));
                 setActiveOrder((prev) => {
                     if (prev && prev.status === 'pending_payment' && data.order.status === 'paid') {
@@ -110,10 +116,12 @@ export default function Shop() {
                     }
                     return data.order;
                 });
-            } catch { /* keep polling */ }
+            } catch {
+                // keep polling
+            }
         }, 5000);
         return () => clearInterval(timer);
-    }, [activeOrder, account]);
+    }, [activeOrder, agentApiKey]);
 
     useEffect(() => {
         if (!toast) return undefined;
@@ -121,23 +129,53 @@ export default function Shop() {
         return () => clearTimeout(timer);
     }, [toast]);
 
-    const createOrder = async (buyAndEquip) => {
-        if (!selectedItem) return;
-        if (!canOrder) {
-            pushToast('error', 'Connect wallet and select owned agent first.');
+    const connectAgent = async () => {
+        const normalized = agentApiKeyInput.trim();
+        if (!normalized) {
+            pushToast('error', 'Agent API key is required.');
             return;
         }
         setBusy(true);
         try {
-            const result = await createShopOrder({
-                agentId: selectedAgent.id,
+            const profile = await getAgentProfile(normalized);
+            setAgentApiKey(normalized);
+            setAgentProfile(profile);
+            localStorage.setItem(API_KEY_STORAGE_KEY, normalized);
+            const shopData = await getAgentShopInventory(normalized);
+            setInventory(hydrateInventory(shopData.inventory));
+            pushToast('buy', `Connected as ${profile.name}.`);
+        } catch (error) {
+            pushToast('error', error.message || 'Agent API key is invalid.');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const disconnectAgent = () => {
+        setAgentApiKey('');
+        setAgentApiKeyInput('');
+        setAgentProfile(null);
+        setInventory(EMPTY_INVENTORY);
+        setActiveOrder(null);
+        localStorage.removeItem(API_KEY_STORAGE_KEY);
+    };
+
+    const createOrder = async (buyAndEquip) => {
+        if (!selectedItem) return;
+        if (!canOrder) {
+            pushToast('error', 'Connect your agent API key first.');
+            return;
+        }
+        setBusy(true);
+        try {
+            const result = await createAgentShopOrder({
+                apiKey: agentApiKey,
                 itemId: selectedItem.id,
-                walletAddress: account,
                 buyAndEquip,
             });
             setActiveOrder(result.order);
             setTxHash('');
-            pushToast('buy', 'Order created. Pay on Telegram and confirm tx hash.');
+            pushToast('buy', 'Order created. Continue with direct agent wallet payment.');
         } catch (error) {
             pushToast('error', error.message || 'Order create failed.');
         } finally {
@@ -145,30 +183,26 @@ export default function Shop() {
         }
     };
 
-    const confirmOrder = async () => {
-        if (!activeOrder || !txHash) return;
+    const payFromAgentWallet = async () => {
+        if (!activeOrder || activeOrder.status !== 'pending_payment') return;
         setBusy(true);
         try {
-            const result = await confirmShopOrder(activeOrder.id, {
-                walletAddress: account,
-                txHash: txHash.trim(),
-            });
+            const result = await payShopOrderFromAgentWallet(activeOrder.id, agentApiKey);
             setActiveOrder(result.order);
             setInventory(hydrateInventory(result.inventory));
-            setTxHash('');
-            pushToast('buy_equip', 'Payment confirmed.');
+            pushToast('buy_equip', 'Paid from agent wallet successfully.');
         } catch (error) {
-            pushToast('error', error.message || 'Payment confirm failed.');
+            pushToast('error', error.message || 'Agent wallet payment failed.');
         } finally {
             setBusy(false);
         }
     };
 
     const equipFromBackpack = async (item) => {
-        if (!account || !selectedAgent || !item || item.category === 'potion') return;
+        if (!agentApiKey || !item || item.category === 'potion') return;
         setBusy(true);
         try {
-            const updated = await equipShopItem({ agentId: selectedAgent.id, walletAddress: account, itemId: item.id });
+            const updated = await equipAgentShopItem({ apiKey: agentApiKey, itemId: item.id });
             setInventory(hydrateInventory(updated));
             pushToast('equip', `${item.name} equipped.`);
         } catch (error) {
@@ -179,10 +213,10 @@ export default function Shop() {
     };
 
     const unequipSlot = async (slot) => {
-        if (!account || !selectedAgent) return;
+        if (!agentApiKey) return;
         setBusy(true);
         try {
-            const updated = await unequipShopItem({ agentId: selectedAgent.id, walletAddress: account, slot });
+            const updated = await unequipAgentShopItem({ apiKey: agentApiKey, slot });
             setInventory(hydrateInventory(updated));
             pushToast('unequip', `${slot} unequipped.`);
         } catch (error) {
@@ -199,21 +233,49 @@ export default function Shop() {
             <div className="shop-hero">
                 <div className="container">
                     <h1 className="shop-hero__title text-display"><ShoppingBag size={28} className="shop-hero__icon" />Arena Shop</h1>
-                    <p className="shop-hero__subtitle">Telegram payment on Monad: buy, verify tx, equip.</p>
+                    <p className="shop-hero__subtitle">Direct MON payment from agent wallet on Monad.</p>
                 </div>
             </div>
 
             <div className="shop-content container">
+                <div className="shop-payment-banner card-base">
+                    <div className="shop-payment-banner__header">
+                        <span className="shop-payment-banner__title"><KeyRound size={14} /> Agent Authentication</span>
+                        {agentProfile && <span className="shop-payment-banner__pill">{agentProfile.name}</span>}
+                    </div>
+                    <div className="shop-payment-box__confirm">
+                        <input
+                            className="input-field"
+                            placeholder="aca_xxx agent api key"
+                            value={agentApiKeyInput}
+                            onChange={(e) => setAgentApiKeyInput(e.target.value)}
+                        />
+                        {!agentApiKey ? (
+                            <button className="btn btn-primary" disabled={busy} onClick={connectAgent}>
+                                Connect Agent
+                            </button>
+                        ) : (
+                            <button className="btn btn-secondary" disabled={busy} onClick={disconnectAgent}>
+                                Disconnect
+                            </button>
+                        )}
+                    </div>
+                    {agentProfile && (
+                        <div className="shop-payment-banner__body">
+                            <span>Agent ID: <code>{agentProfile.id}</code></span>
+                            <span>Status: <code>{agentProfile.status}</code></span>
+                            <span>Wallet: <code>{agentProfile.wallet && agentProfile.wallet.address ? agentProfile.wallet.address : 'N/A'}</code></span>
+                        </div>
+                    )}
+                </div>
+
                 <div className="shop-agent-bar card-base">
                     <div className="shop-agent-bar__left">
                         <div className="shop-agent-select">
-                            <label className="shop-agent-select__label">Agent</label>
-                            <div className="shop-agent-select__dropdown">
-                                <select value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={!account || agents.length === 0}>
-                                    {!account && <option value="">Connect wallet</option>}
-                                    {account && agents.length === 0 && <option value="">No owned agents</option>}
-                                    {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
-                                </select>
+                            <label className="shop-agent-select__label">Payment Route</label>
+                            <div className="shop-payment-banner__body">
+                                <span><Wallet size={12} /> Agent wallet to treasury</span>
+                                <span>Treasury: <code>{config && config.treasury_address ? config.treasury_address : 'Not configured'}</code></span>
                             </div>
                         </div>
                     </div>
@@ -245,10 +307,30 @@ export default function Shop() {
                             <span className="shop-payment-banner__pill">{activeOrder.amount_mon} MON</span>
                         </div>
                         <div className="shop-payment-banner__body">
-                            <span>Token: <code>{activeOrder.order_token}</code></span>
+                            <span>Method: <code>{activeOrder.payment_method}</code></span>
                             <span>Treasury: <code>{activeOrder.treasury_address}</code></span>
-                            <span>Telegram: <code>{activeOrder.payment_confirm_command}</code></span>
+                            <span>Expected Payer: <code>{activeOrder.expected_from_wallet || '-'}</code></span>
+                            <span>Telegram fallback: <code>{activeOrder.payment_confirm_command}</code></span>
                         </div>
+                        {activeOrder.payment_method === 'agent_wallet' ? (
+                            <div className="shop-payment-box__confirm">
+                                <button className="btn btn-primary" disabled={busy} onClick={payFromAgentWallet}>
+                                    Pay From Agent Wallet
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="shop-payment-box__confirm">
+                                <input
+                                    className="input-field"
+                                    placeholder="0x... tx hash"
+                                    value={txHash}
+                                    onChange={(e) => setTxHash(e.target.value)}
+                                />
+                                <button className="btn btn-primary" disabled>
+                                    Confirm Manually Disabled
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -323,12 +405,11 @@ export default function Shop() {
                             </div>
                             {orderForItem && orderForItem.status === 'pending_payment' && (
                                 <div className="shop-payment-box">
-                                    <div className="shop-payment-box__row"><span>Token</span><code>{orderForItem.order_token}</code></div>
-                                    <div className="shop-payment-box__row"><span>Treasury</span><code>{orderForItem.treasury_address}</code></div>
+                                    <div className="shop-payment-box__row"><span>Order</span><code>{orderForItem.id}</code></div>
+                                    <div className="shop-payment-box__row"><span>Method</span><code>{orderForItem.payment_method}</code></div>
                                     <div className="shop-payment-box__confirm">
-                                        <input className="input-field" placeholder="0x... tx hash" value={txHash} onChange={(e) => setTxHash(e.target.value)} />
-                                        <button className="btn btn-primary" disabled={busy || !txHash} onClick={confirmOrder}>
-                                            Confirm Payment
+                                        <button className="btn btn-primary" disabled={busy} onClick={payFromAgentWallet}>
+                                            Pay From Agent Wallet
                                         </button>
                                     </div>
                                 </div>
@@ -340,3 +421,4 @@ export default function Shop() {
         </div>
     );
 }
+

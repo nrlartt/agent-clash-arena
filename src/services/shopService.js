@@ -24,6 +24,10 @@ async function request(path, options = {}) {
     return payload.data;
 }
 
+function authHeaders(apiKey) {
+    return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+}
+
 export async function getShopConfig() {
     return request('/shop/config');
 }
@@ -77,6 +81,62 @@ export async function unequipShopItem({ agentId, walletAddress, slot }) {
         method: 'POST',
         body: JSON.stringify({
             wallet_address: walletAddress,
+            slot,
+        }),
+    });
+}
+
+export async function getAgentProfile(apiKey) {
+    return request('/agents/me', {
+        headers: authHeaders(apiKey),
+    });
+}
+
+export async function getAgentShopInventory(apiKey) {
+    return request('/shop/agent/inventory', {
+        headers: authHeaders(apiKey),
+    });
+}
+
+export async function createAgentShopOrder({ apiKey, itemId, buyAndEquip }) {
+    return request('/shop/agent/orders', {
+        method: 'POST',
+        headers: authHeaders(apiKey),
+        body: JSON.stringify({
+            item_id: itemId,
+            buy_and_equip: !!buyAndEquip,
+        }),
+    });
+}
+
+export async function getAgentShopOrder(orderId, apiKey) {
+    return request(`/shop/agent/orders/${encodeURIComponent(orderId)}`, {
+        headers: authHeaders(apiKey),
+    });
+}
+
+export async function payShopOrderFromAgentWallet(orderId, apiKey) {
+    return request(`/shop/orders/${encodeURIComponent(orderId)}/agent-pay`, {
+        method: 'POST',
+        headers: authHeaders(apiKey),
+    });
+}
+
+export async function equipAgentShopItem({ apiKey, itemId }) {
+    return request('/shop/agent/inventory/equip', {
+        method: 'POST',
+        headers: authHeaders(apiKey),
+        body: JSON.stringify({
+            item_id: itemId,
+        }),
+    });
+}
+
+export async function unequipAgentShopItem({ apiKey, slot }) {
+    return request('/shop/agent/inventory/unequip', {
+        method: 'POST',
+        headers: authHeaders(apiKey),
+        body: JSON.stringify({
             slot,
         }),
     });

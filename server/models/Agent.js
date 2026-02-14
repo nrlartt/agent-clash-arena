@@ -14,6 +14,17 @@ const agentSchema = new mongoose.Schema({
     // Owner
     claimedBy: { type: String, default: null },  // wallet address
     claimedAt: { type: Date, default: null },
+
+    // Agent wallet (private key is stored encrypted only)
+    wallet: {
+        address: { type: String, default: null },
+        encryption: {
+            algorithm: { type: String, default: null },
+            version: { type: String, default: null },
+        },
+        encryptedPrivateKey: { type: String, default: null, select: false },
+        createdAt: { type: Date, default: null },
+    },
     
     // Stats
     stats: {
