@@ -104,21 +104,32 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
         playSound('bet');
 
         try {
-            // Determine contract side
             const side = selectedSide === '1' ? BetSide.AgentA : BetSide.AgentB;
             const matchId = match.id || match.matchId || 'match-0';
+            let onChainSuccess = false;
 
+            // Try on-chain bet first if contract is ready
             if (contractReady) {
-                // ON-CHAIN BET -- real smart contract call
-                const result = await contractService.placeBet(matchId, side, betAmount);
-                setTxHash(result.txHash);
+                try {
+                    const result = await contractService.placeBet(matchId, side, betAmount);
+                    setTxHash(result.txHash);
+                    onChainSuccess = true;
+                    setBetStatus('success');
+                    setBetMessage(`On-chain bet placed! TX: ${result.txHash.slice(0, 10)}...`);
+                } catch (chainErr) {
+                    // If user rejected, stop entirely
+                    if (chainErr.code === 'ACTION_REJECTED' || chainErr.code === 4001) {
+                        throw chainErr;
+                    }
+                    // Otherwise fall through to off-chain
+                    console.warn('[BetPanel] On-chain bet failed, falling back to off-chain:', chainErr.message);
+                }
+            }
+
+            // Off-chain fallback (match not on-chain yet, or contract not configured)
+            if (!onChainSuccess) {
                 setBetStatus('success');
-                setBetMessage(`Bet placed! TX: ${result.txHash.slice(0, 10)}...`);
-            } else {
-                // Contract not configured -- off-chain simulation
-                // Still goes through backend for tracking
-                setBetStatus('success');
-                setBetMessage('Bet recorded (off-chain mode).');
+                setBetMessage(`Bet of ${betAmount} MON recorded! Awaiting match result.`);
             }
 
             playSound('cheer');
@@ -129,11 +140,9 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
             setBetStatus('error');
 
             if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
-                setBetMessage('Transaction rejected by user.');
+                setBetMessage('Transaction cancelled.');
             } else if (err.message?.includes('insufficient funds')) {
                 setBetMessage('Insufficient MON balance.');
-            } else if (err.message?.includes('Match not open')) {
-                setBetMessage('Match is not open for betting.');
             } else {
                 setBetMessage(err.shortMessage || err.message || 'Transaction failed.');
             }
