@@ -187,10 +187,14 @@ export default function Arena() {
     }, []);
 
     // ── Computed ──
-    const upcomingMatches = recentResults.slice(0, 4);
-    const winnerAgent = matchResult
-        ? (matchResult.winner === '1' ? currentMatch.agent1 : currentMatch.agent2)
-        : null;
+    const winnerAgent = useMemo(() => {
+        if (!matchResult || !currentMatch) return null;
+        // matchResult.winnerId is '1' or '2', matchResult.winner is { name, avatar, color }
+        if (matchResult.winnerId === '1') return currentMatch.agent1;
+        if (matchResult.winnerId === '2') return currentMatch.agent2;
+        // Fallback: use the winner object from the result directly
+        return matchResult.winner || null;
+    }, [matchResult, currentMatch]);
 
     const getEquipmentBonus = (agentId) => {
         const inv = inventories[agentId];
@@ -294,15 +298,15 @@ export default function Arena() {
                             <span>Recent Results</span>
                         </div>
                         <div className="arena-results__list">
-                            {recentResults.slice(0, 5).map((r) => (
-                                <div key={r.id} className="arena-results__item">
+                            {recentResults.slice(0, 5).map((r, idx) => (
+                                <div key={r.matchId || r.id || idx} className="arena-results__item">
                                     <div className="arena-results__fighters">
-                                        <span className="arena-results__winner" style={{ color: r.winner.color }}>
-                                            {r.winner.avatar} {r.winner.name}
+                                        <span className="arena-results__winner" style={{ color: r.winner?.color || '#FFE93E' }}>
+                                            {r.winner?.avatar} {r.winner?.name || 'Unknown'}
                                         </span>
                                         <span className="arena-results__vs">beat</span>
                                         <span className="arena-results__loser">
-                                            {r.loser.avatar} {r.loser.name}
+                                            {r.loser?.avatar} {r.loser?.name || 'Unknown'}
                                         </span>
                                     </div>
                                     <div className="arena-results__meta">
@@ -320,22 +324,22 @@ export default function Arena() {
                         </div>
                     </div>
 
-                    {/* Upcoming Matches */}
+                    {/* Recent Matchups */}
                     <div className="arena-upcoming-panel">
                         <div className="arena-upcoming-panel__header">
                             <Swords size={14} />
-                            <span>Up Next</span>
+                            <span>Recent Matchups</span>
                         </div>
                         <div className="arena-upcoming-panel__list">
-                            {upcomingMatches.slice(0, 4).map((m, idx) => (
-                                <div key={m.id} className="arena-upcoming-panel__item">
-                                    <span className="arena-upcoming-panel__num">#{idx + 2}</span>
+                            {recentResults.slice(0, 4).map((m, idx) => (
+                                <div key={m.matchId || idx} className="arena-upcoming-panel__item">
+                                    <span className="arena-upcoming-panel__num">#{idx + 1}</span>
                                     <div className="arena-upcoming-panel__matchup">
-                                        <span style={{ color: m.agent1.color }}>{m.agent1.avatar} {m.agent1.name}</span>
+                                        <span style={{ color: m.winner?.color || '#FFE93E' }}>{m.winner?.avatar} {m.winner?.name}</span>
                                         <span className="arena-upcoming-panel__vs-small">vs</span>
-                                        <span style={{ color: m.agent2.color }}>{m.agent2.name} {m.agent2.avatar}</span>
+                                        <span style={{ color: m.loser?.color || '#888' }}>{m.loser?.name} {m.loser?.avatar}</span>
                                     </div>
-                                    <span className="arena-upcoming-panel__odds">{m.agent1Odds}x</span>
+                                    <span className="arena-upcoming-panel__odds">{m.method}</span>
                                 </div>
                             ))}
                         </div>
@@ -362,7 +366,7 @@ export default function Arena() {
                                     </h2>
                                     <div className="competitor-meta">
                                         <span className="competitor-rank">#{currentMatch.agent1.rank}</span>
-                                        <span className="competitor-weapon">{currentMatch.agent1.weapon.icon}</span>
+                                        <span className="competitor-weapon">{currentMatch.agent1.weapon?.icon || '👊'}</span>
                                         <span className="competitor-power">
                                             <Zap size={10} /> {currentMatch.agent1.powerRating}
                                         </span>
@@ -410,7 +414,7 @@ export default function Arena() {
                                         <span className="competitor-power">
                                             <Zap size={10} /> {currentMatch.agent2.powerRating}
                                         </span>
-                                        <span className="competitor-weapon">{currentMatch.agent2.weapon.icon}</span>
+                                        <span className="competitor-weapon">{currentMatch.agent2.weapon?.icon || '👊'}</span>
                                         <span className="competitor-rank">#{currentMatch.agent2.rank}</span>
                                     </div>
                                     {liveAgentState?.['2'] && (
