@@ -6,17 +6,15 @@ import { createContext, useContext, useState, useCallback, useEffect } from 'rea
 import { BrowserProvider, formatEther } from 'ethers';
 
 const MONAD_CHAIN = {
-    chainId: '0x279F',  // 10143 decimal
-    chainName: 'Monad Testnet',
-    rpcUrls: [import.meta.env.VITE_MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz'],
+    chainId: '0x8F',  // 143 decimal
+    chainName: 'Monad Mainnet',
+    rpcUrls: [import.meta.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz'],
     nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
-    blockExplorerUrls: ['https://testnet.monadexplorer.com'],
+    blockExplorerUrls: ['https://monadscan.com'],
 };
 
-// Monad Testnet Faucet URL (for reference)
-export const MONAD_FAUCET_URL = 'https://testnet.monad.xyz/';
 // Monad Explorer URL  
-export const MONAD_EXPLORER_URL = 'https://testnet.monadexplorer.com';
+export const MONAD_EXPLORER_URL = 'https://monadscan.com';
 
 const WalletContext = createContext(null);
 
@@ -29,7 +27,7 @@ export function WalletProvider({ children }) {
     const [provider, setProvider] = useState(null);
     const [walletType, setWalletType] = useState(null); // 'metamask' | 'circle'
 
-    const isMonad = chainId === 10143;
+    const isMonad = chainId === 143;
     const isInstalled = typeof window !== 'undefined' && !!window.ethereum;
 
     // Fetch balance
@@ -102,7 +100,7 @@ export function WalletProvider({ children }) {
             setChainId(currentChainId);
 
             // Switch to Monad if not on it
-            if (currentChainId !== 10143) {
+            if (currentChainId !== 143) {
                 await switchToMonad();
             }
 
@@ -123,7 +121,7 @@ export function WalletProvider({ children }) {
     const connectCircle = useCallback((address, balance) => {
         setAccount(address);
         setBalance(balance);
-        setChainId(10143); // Assume Monad for now
+        setChainId(143); // Assume Monad for now
         setWalletType('circle');
         setProvider(null); // Circle handled via SDK service
     }, []);

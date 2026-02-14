@@ -99,7 +99,7 @@ Telegram env vars used:
 Shop payment env vars:
 - `SHOP_TREASURY_ADDRESS` (required for accepting MON payments)
 - `SHOP_ORDER_TTL_MINUTES` (default `30`)
-- `MONAD_EXPLORER_TX_BASE` (default `https://testnet.monadexplorer.com/tx/`)
+- `MONAD_EXPLORER_TX_BASE` (default `https://monadscan.com/tx/`)
 - `AGENT_PAYMENT_GAS_RESERVE_MON` (default `0.005`)
 
 Agent wallet security env vars:

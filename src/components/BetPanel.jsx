@@ -93,7 +93,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
         }
         if (!isMonad) {
             setBetStatus('error');
-            setBetMessage('Please switch to Monad Testnet.');
+            setBetMessage('Please switch to Monad Mainnet.');
             return;
         }
 
@@ -346,7 +346,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
                     <span>{betMessage}</span>
                     {txHash && (
                         <a
-                            href={`https://testnet.monadexplorer.com/tx/${txHash}`}
+                            href={`https://monadscan.com/tx/${txHash}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="bet-panel__tx-link"

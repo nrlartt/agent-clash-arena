@@ -40,7 +40,7 @@ class BlockchainService {
     }
 
     _init() {
-        const rpcUrl = process.env.VITE_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
+        const rpcUrl = process.env.VITE_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
         const privateKey = process.env.OPERATOR_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
         const contractAddress = process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS;
 

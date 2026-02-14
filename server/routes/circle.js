@@ -70,12 +70,12 @@ router.post('/initialize-user', async (req, res) => {
         const { userToken } = req.body;
         if (!userToken) return res.status(400).json({ error: 'Missing userToken' });
 
-        // Initialize user on ARC-TESTNET (or Monad if supported later via chainId)
-        // For now using standard testnet as placeholder
+        // Initialize user wallet (Circle does not natively support Monad yet)
+        // Using Polygon Amoy as fallback chain for Circle wallets
         const data = await circleRequest('/v1/w3s/user/initialize', 'POST', {
             idempotencyKey: uuidv4(),
             accountType: 'SCA',
-            blockchains: ['MATIC-AMOY'], // Using a supported testnet, change to Monad when available
+            blockchains: ['MATIC-AMOY'], // Using Polygon Amoy as Circle fallback; primary chain is Monad Mainnet
         }, userToken);
 
         res.json(data.data);

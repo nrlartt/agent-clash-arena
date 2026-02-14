@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-// DEPLOY SCRIPT — Deploy AgentClashBetting to Monad Testnet
+// DEPLOY SCRIPT — Deploy AgentClashBetting to Monad Mainnet
 // 
 // Usage:
 //   node contracts/deploy.js
@@ -7,7 +7,7 @@
 // Required env vars:
 //   DEPLOYER_PRIVATE_KEY — Private key of deployer wallet
 //   OPERATOR_ADDRESS     — Backend server wallet address (can create/resolve matches)
-//   MONAD_RPC_URL        — Monad Testnet RPC (default: https://testnet-rpc.monad.xyz)
+//   MONAD_RPC_URL        — Monad Mainnet RPC (default: https://rpc.monad.xyz)
 //
 // After deploy, add the contract address to .env:
 //   VITE_BETTING_CONTRACT_ADDRESS=0x...
@@ -20,7 +20,7 @@ const path = require('path');
 // Load env from root .env
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const RPC_URL = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
+const RPC_URL = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
 const DEPLOYER_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 const OPERATOR = process.env.OPERATOR_ADDRESS;
 
@@ -42,7 +42,7 @@ if (!OPERATOR) {
 async function main() {
     console.log('');
     console.log('═══════════════════════════════════════════════');
-    console.log('AgentClashBetting — Deploy to Monad Testnet');
+    console.log('AgentClashBetting — Deploy to Monad Mainnet');
     console.log('═══════════════════════════════════════════════');
     console.log(`RPC:      ${RPC_URL}`);
     console.log(`Operator: ${OPERATOR}`);
@@ -56,7 +56,7 @@ async function main() {
     console.log(`Balance:  ${ethers.formatEther(balance)} MON`);
     
     if (balance === 0n) {
-        console.error('ERROR: Deployer has no MON. Get testnet MON from https://testnet.monad.xyz/');
+        console.error('ERROR: Deployer has no MON. Fund your wallet with MON on Monad Mainnet.');
         process.exit(1);
     }
 
@@ -72,7 +72,7 @@ async function main() {
         console.log('  1. Go to https://remix.ethereum.org');
         console.log('  2. Copy contracts/AgentClashBetting.sol');
         console.log('  3. Compile with Solidity 0.8.24');
-        console.log('  4. Deploy → Injected Provider (MetaMask on Monad Testnet)');
+        console.log('  4. Deploy → Injected Provider (MetaMask on Monad Mainnet)');
         console.log(`  5. Constructor args: operator = ${OPERATOR}`);
         console.log('  6. Copy deployed address → add to .env as VITE_BETTING_CONTRACT_ADDRESS');
         console.log('');
@@ -96,7 +96,7 @@ async function main() {
     console.log('');
     console.log('CONTRACT DEPLOYED SUCCESSFULLY!');
     console.log(`Address: ${address}`);
-    console.log(`Explorer: https://testnet.monadexplorer.com/address/${address}`);
+    console.log(`Explorer: https://monadscan.com/address/${address}`);
     console.log('');
     console.log('Add this to your .env file:');
     console.log(`VITE_BETTING_CONTRACT_ADDRESS=${address}`);

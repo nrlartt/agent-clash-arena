@@ -77,17 +77,17 @@ export default function Header() {
                                 </button>
                             )}
 
-                            {/* Faucet Button — Get free MON for testnet */}
+                            {/* Buy MON — Link to exchange/bridge */}
                             {isMonad && (
                                 <a
-                                    href="https://testnet.monad.xyz/"
+                                    href="https://monadscan.com"
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="header__faucet-btn"
-                                    title="Get free MON tokens from Monad Testnet faucet"
+                                    title="View Monad Mainnet on explorer"
                                 >
                                     <Droplets size={14} />
-                                    <span>Get MON</span>
+                                    <span>Explorer</span>
                                 </a>
                             )}
 
@@ -116,7 +116,7 @@ export default function Header() {
                                         </div>
                                         <div className="header__dropdown-network">
                                             <span className={`header__dropdown-chain ${isMonad ? 'header__dropdown-chain--monad' : 'header__dropdown-chain--wrong'}`}>
-                                                {isMonad ? '🟣 Monad Testnet' : '⚠️ Wrong Network'}
+                                                {isMonad ? '🟣 Monad Mainnet' : '⚠️ Wrong Network'}
                                             </span>
                                             {!isMonad && (
                                                 <button className="btn btn-sm btn-primary" onClick={switchToMonad}>
@@ -125,7 +125,7 @@ export default function Header() {
                                             )}
                                         </div>
                                         <a
-                                            href={`https://testnet.monadexplorer.com/address/${account}`}
+                                            href={`https://monadscan.com/address/${account}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
                                             className="header__dropdown-link"

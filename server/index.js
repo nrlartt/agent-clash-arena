@@ -216,7 +216,7 @@ app.get('/api/v1/health', async (_req, res) => {
             liveMatches: matchCount,
             blockchain: {
                 enabled: blockchain.enabled,
-                network: 'Monad Testnet',
+                network: 'Monad Mainnet',
                 operatorBalance: operatorBalance ? `${operatorBalance} MON` : null,
             },
         });

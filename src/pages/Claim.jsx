@@ -189,7 +189,7 @@ export default function Claim() {
                         </div>
                         <div className="stat-row">
                             <span>Network:</span>
-                            <span className="badge badge-win">Monad Testnet</span>
+                            <span className="badge badge-win">Monad Mainnet</span>
                         </div>
                         <div className="stat-row">
                             <span>Status:</span>
@@ -252,9 +252,9 @@ export default function Claim() {
                 <div className="claim-card glass-card" style={{ textAlign: 'center', alignItems: 'center' }}>
                     <AlertTriangle size={48} style={{ color: 'var(--neon-yellow)' }} />
                     <h2>Wrong Network</h2>
-                    <p className="claim-muted">Please switch to Monad Testnet to continue.</p>
+                    <p className="claim-muted">Please switch to Monad Mainnet to continue.</p>
                     <button className="btn btn-primary" onClick={async () => { await switchToMonad(); setStatus('found'); }}>
-                        Switch to Monad Testnet
+                        Switch to Monad Mainnet
                     </button>
                 </div>
             </div>
@@ -326,9 +326,9 @@ export default function Claim() {
                         /* Step B: Switch Network */
                         <div className="connect-prompt">
                             <AlertTriangle size={24} style={{ color: 'var(--neon-yellow)' }} />
-                            <p>Switch to Monad Testnet to continue</p>
+                            <p>Switch to Monad Mainnet to continue</p>
                             <button className="btn btn-primary btn-full" onClick={switchToMonad}>
-                                Switch to Monad Testnet
+                                Switch to Monad Mainnet
                             </button>
                         </div>
                     ) : (
@@ -337,7 +337,7 @@ export default function Claim() {
                             <div className="connected-info">
                                 <span className="connected-dot" />
                                 <span>Connected: <strong>{shortAddress}</strong></span>
-                                <span className="network-badge">Monad Testnet</span>
+                                <span className="network-badge">Monad Mainnet</span>
                             </div>
 
                             {/* Twitter Handle (Optional) */}

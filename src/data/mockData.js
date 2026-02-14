@@ -493,7 +493,7 @@ export const REGISTRATION_STEPS = [
 
 // ── Monad Config ─────────────────────────────────────────────
 export const MONAD_CONFIG = {
-    chainId: 10143,
+    chainId: 143,
     chainName: 'Monad',
     rpcUrl: 'https://rpc.monad.xyz',
     blockExplorer: 'https://monadvision.com',

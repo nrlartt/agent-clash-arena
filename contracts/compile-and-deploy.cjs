@@ -1,4 +1,4 @@
-// Compile and Deploy AgentClashBetting to Monad Testnet
+// Compile and Deploy AgentClashBetting to Monad Mainnet
 const solc = require('solc');
 const { ethers } = require('ethers');
 const fs = require('fs');
@@ -6,7 +6,7 @@ const path = require('path');
 
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 
-const RPC = process.env.VITE_MONAD_RPC_URL || 'https://testnet-rpc.monad.xyz';
+const RPC = process.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
 const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 const OPERATOR = process.env.OPERATOR_ADDRESS;
 
@@ -54,7 +54,7 @@ async function main() {
     console.log('  Artifact saved to contracts/artifacts/\n');
 
     // 2. Connect
-    console.log('[2/4] Connecting to Monad Testnet...');
+    console.log('[2/4] Connecting to Monad Mainnet...');
     const provider = new ethers.JsonRpcProvider(RPC);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const balance = await provider.getBalance(wallet.address);
@@ -74,7 +74,7 @@ async function main() {
 
     console.log('\n[4/4] DEPLOYED SUCCESSFULLY!');
     console.log('  Contract:', address);
-    console.log('  Explorer: https://testnet.monadexplorer.com/address/' + address);
+    console.log('  Explorer: https://monadscan.com/address/' + address);
     
     // 4. Output env line
     console.log('\n=== Add this to your .env ===');
