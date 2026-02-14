@@ -47,8 +47,9 @@ class AutoMatchmaker {
         try {
             await this._nextMatch();
         } catch (err) {
-            logger.error('[AutoMatchmaker] Match cycle error, retrying in 10s', { error: err.message });
-            this.phaseTimer = setTimeout(() => this._safeNextMatch(), 10000);
+            logger.error('[AutoMatchmaker] Match cycle error, retrying in 5s', { error: err.message, stack: err.stack });
+            clearTimeout(this.phaseTimer);
+            this.phaseTimer = setTimeout(() => this._safeNextMatch(), 5000);
         }
     }
 
@@ -141,14 +142,32 @@ class AutoMatchmaker {
         const fightEvents = this._generateFightEvents();
         fightEvents.forEach((event, i) => {
             setTimeout(() => {
-                this.io.emit('match:fight_event', event);
+                try {
+                    this.io.emit('match:fight_event', event);
+                } catch (e) { /* ignore */ }
             }, event.delay);
         });
 
-        // End fight after duration
+        // End fight after duration — always schedule next match even if _endFight fails
         this.phaseTimer = setTimeout(() => {
-            this._endFight();
+            this._endFight().catch(err => {
+                logger.error('[AutoMatchmaker] _endFight crashed, forcing next match', { error: err.message });
+                this._scheduleNextMatch();
+            });
         }, FIGHT_DURATION);
+    }
+
+    /**
+     * Helper: always schedule the next match (RESULT → COOLDOWN → next)
+     */
+    _scheduleNextMatch() {
+        clearTimeout(this.phaseTimer);
+        this.phase = 'COOLDOWN';
+        try { this.io.emit('match:phase', { phase: 'COOLDOWN' }); } catch (e) { /* ignore */ }
+        logger.info('[AutoMatchmaker] Scheduling next match in 5s');
+        this.phaseTimer = setTimeout(() => {
+            this._safeNextMatch();
+        }, COOLDOWN_DURATION);
     }
 
     async _endFight() {
@@ -174,10 +193,10 @@ class AutoMatchmaker {
             timestamp: Date.now(),
         };
 
-        // Resolve match on-chain
+        // Resolve match on-chain (non-blocking)
         if (this.currentMatch.onChain) {
             try {
-                const winningSide = winnerId === '1' ? 1 : 2; // AgentA=1, AgentB=2
+                const winningSide = winnerId === '1' ? 1 : 2;
                 await blockchain.resolveMatchOnChain(this.currentMatch.id, winningSide);
                 logger.info(`[AutoMatchmaker] Match ${this.currentMatch.id} resolved on-chain, winner: ${winner.name}`);
             } catch (err) {
@@ -200,18 +219,19 @@ class AutoMatchmaker {
         if (simWinner) simWinner.wins++;
         if (simLoser) simLoser.losses++;
 
-        this.io.emit('match:phase', { phase: 'RESULT', match: this.currentMatch, result });
-        this.io.emit('match:result', result);
+        try {
+            this.io.emit('match:phase', { phase: 'RESULT', match: this.currentMatch, result });
+            this.io.emit('match:result', result);
+        } catch (err) {
+            logger.error('[AutoMatchmaker] Failed to emit result', { error: err.message });
+        }
 
-        // Cooldown then next match
+        // ALWAYS schedule next match — this is the critical part
         this.phaseTimer = setTimeout(() => {
-            this.phase = 'COOLDOWN';
-            this.io.emit('match:phase', { phase: 'COOLDOWN' });
-
-            this.phaseTimer = setTimeout(() => {
-                this._safeNextMatch();
-            }, COOLDOWN_DURATION);
+            this._scheduleNextMatch();
         }, RESULT_DURATION);
+
+        logger.info(`[AutoMatchmaker] Match ${this.currentMatch.id} ended. Winner: ${winner.name} by ${method}. Next match in ${RESULT_DURATION / 1000 + COOLDOWN_DURATION / 1000}s`);
     }
 
     // ── Helpers ─────────────────────────────────────────────

@@ -26,8 +26,9 @@ export class GameEngine {
         this.winner = null;
         this.finishReason = null;
 
-        // Match timing
-        this.roundTime = 60;         // 60 seconds per round (faster, more exciting)
+        // Match timing — must match backend FIGHT_DURATION (45s total)
+        // 3 rounds × 13s = 39s fighting + ~6s round pauses = ~45s total
+        this.roundTime = 13;
         this.currentRound = 1;
         this.maxRounds = 3;
         this.roundTimer = this.roundTime;
@@ -749,10 +750,10 @@ export class GameEngine {
             return;
         }
 
-        // Next round
+        // Next round — keep pause short to fit in backend's 45s window
         this.currentRound++;
         this.roundTimer = this.roundTime;
-        this.roundPauseUntil = this.gameTime + 3000;
+        this.roundPauseUntil = this.gameTime + 2000;
 
         // Partial HP restore
         Object.values(this.agents).forEach(a => {
