@@ -447,37 +447,112 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
             }
 
             // ── Name tag ──
-            ctx.font = '600 10px "Inter", sans-serif';
+            ctx.font = '600 11px "Inter", sans-serif';
             ctx.textAlign = 'center';
             ctx.fillStyle = a.color;
-            ctx.fillText(agentData?.name || `Agent ${id}`, a.x, a.y - 42);
+            ctx.shadowColor = a.color;
+            ctx.shadowBlur = 4;
+            ctx.fillText(agentData?.name || `Agent ${id}`, a.x, a.y - 52);
+            ctx.shadowBlur = 0;
 
-            // ── HP bar ──
-            const hpBarW = 50;
-            const hpBarH = 4;
+            // ── HP bar (enhanced) ──
+            const hpBarW = 64;
+            const hpBarH = 8;
             const hpX = a.x - hpBarW / 2;
-            const hpY = a.y - 36;
-            const hpPct = a.hp / a.maxHp;
+            const hpY = a.y - 44;
+            const hpPct = Math.max(0, a.hp / a.maxHp);
 
-            ctx.fillStyle = '#1a1a2577';
-            ctx.fillRect(hpX - 1, hpY - 1, hpBarW + 2, hpBarH + 2);
-            const hpColor = hpPct > 0.5 ? '#39FF14' : hpPct > 0.25 ? '#FFE93E' : '#FF3131';
+            // Background (dark with border)
+            ctx.fillStyle = '#0a0a1599';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.lineWidth = 0.5;
+            const hpRadius = 3;
+            ctx.beginPath();
+            ctx.roundRect(hpX - 1, hpY - 1, hpBarW + 2, hpBarH + 2, hpRadius + 1);
+            ctx.fill();
+            ctx.stroke();
+
+            // HP fill with gradient
+            const hpColor = hpPct > 0.6 ? '#39FF14' : hpPct > 0.35 ? '#FFE93E' : '#FF3131';
+            const hpColor2 = hpPct > 0.6 ? '#22CC00' : hpPct > 0.35 ? '#FF9900' : '#CC0000';
+            const hpGrad = ctx.createLinearGradient(hpX, hpY, hpX, hpY + hpBarH);
+            hpGrad.addColorStop(0, hpColor);
+            hpGrad.addColorStop(1, hpColor2);
+
+            if (hpPct > 0) {
+                ctx.save();
+                ctx.beginPath();
+                ctx.roundRect(hpX, hpY, hpBarW * hpPct, hpBarH, hpRadius);
+                ctx.clip();
+                ctx.fillStyle = hpGrad;
+                ctx.fillRect(hpX, hpY, hpBarW * hpPct, hpBarH);
+
+                // Shiny top highlight
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+                ctx.fillRect(hpX, hpY, hpBarW * hpPct, hpBarH * 0.35);
+                ctx.restore();
+            }
+
+            // Glow when low HP
+            if (hpPct < 0.3 && hpPct > 0) {
+                const pulse = 0.3 + Math.sin(state.gameTime / 200) * 0.2;
+                ctx.shadowColor = '#FF3131';
+                ctx.shadowBlur = 8 * pulse;
+                ctx.beginPath();
+                ctx.roundRect(hpX, hpY, hpBarW * hpPct, hpBarH, hpRadius);
+                ctx.fillStyle = `rgba(255, 49, 49, ${pulse * 0.3})`;
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+
+            // HP text
+            ctx.font = '700 7px "Orbitron", "Inter", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#ffffffCC';
+            ctx.fillText(`${Math.round(a.hp)}/${a.maxHp}`, a.x, hpY + hpBarH - 1);
+
+            // HP percentage on the right
+            ctx.font = '600 7px "Inter", sans-serif';
+            ctx.textAlign = 'right';
             ctx.fillStyle = hpColor;
-            ctx.fillRect(hpX, hpY, hpBarW * hpPct, hpBarH);
+            ctx.fillText(`${Math.round(hpPct * 100)}%`, hpX + hpBarW + 18, hpY + hpBarH - 1);
 
-            // ── Special meter ──
+            // ── Special meter (enhanced) ──
             if (a.specialMeter > 0) {
-                const spY = hpY + hpBarH + 2;
+                const spY = hpY + hpBarH + 3;
+                const spBarH = 3;
                 const spPct = a.specialMeter / 100;
-                ctx.fillStyle = '#1a1a2555';
-                ctx.fillRect(hpX, spY, hpBarW, 2);
-                ctx.fillStyle = a.specialReady ? '#FFE93E' : '#836EF9';
+
+                ctx.fillStyle = '#0a0a1566';
+                ctx.beginPath();
+                ctx.roundRect(hpX, spY, hpBarW, spBarH, 1.5);
+                ctx.fill();
+
+                const spColor = a.specialReady ? '#FFE93E' : '#836EF9';
+                const spGrad = ctx.createLinearGradient(hpX, spY, hpX + hpBarW * spPct, spY);
+                spGrad.addColorStop(0, spColor + '88');
+                spGrad.addColorStop(1, spColor);
+
                 if (a.specialReady) {
                     ctx.shadowColor = '#FFE93E';
-                    ctx.shadowBlur = 5;
+                    ctx.shadowBlur = 8;
                 }
-                ctx.fillRect(hpX, spY, hpBarW * spPct, 2);
+                ctx.fillStyle = spGrad;
+                ctx.beginPath();
+                ctx.roundRect(hpX, spY, hpBarW * spPct, spBarH, 1.5);
+                ctx.fill();
                 ctx.shadowBlur = 0;
+
+                // "SPECIAL" text when ready
+                if (a.specialReady) {
+                    ctx.font = '700 6px "Orbitron", sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillStyle = '#FFE93E';
+                    ctx.shadowColor = '#FFE93E';
+                    ctx.shadowBlur = 4;
+                    ctx.fillText('SPECIAL', a.x, spY + spBarH + 8);
+                    ctx.shadowBlur = 0;
+                }
             }
         });
 
@@ -548,7 +623,7 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
         // ── ROUND TRANSITION OVERLAY ──
         if (state.roundPauseUntil > state.gameTime) {
             const pauseRemaining = state.roundPauseUntil - state.gameTime;
-            const pauseProgress = 1 - (pauseRemaining / 2000); // 0→1
+            const pauseProgress = 1 - (pauseRemaining / 3000); // 0→1
             const fadeAlpha = pauseProgress < 0.2 ? pauseProgress / 0.2 :
                               pauseProgress > 0.7 ? (1 - pauseProgress) / 0.3 : 1;
 

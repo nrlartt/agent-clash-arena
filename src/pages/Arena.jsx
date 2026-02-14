@@ -35,6 +35,7 @@ export default function Arena() {
     const [liveMatchState, setLiveMatchState] = useState(null);
     const [matchResult, setMatchResult] = useState(null);
     const [matchKey, setMatchKey] = useState(0);
+    const [finalStats, setFinalStats] = useState(null); // Captured at match end
 
     // ── Live Data State ──
     const [liveStats, setLiveStats] = useState({
@@ -89,6 +90,7 @@ export default function Arena() {
                 setGameState('BETTING');
                 setTimeLeft(tl || 30);
                 setMatchResult(null);
+                setFinalStats(null);
                 setLiveAgentState(null);
                 setLiveMatchState(null);
                 setMatchKey(k => k + 1);
@@ -96,6 +98,12 @@ export default function Arena() {
                 setGameState('LIVE');
             } else if (phase === 'RESULT') {
                 if (result) setMatchResult(result);
+                // Capture final combat stats before clearing
+                setFinalStats(prev => prev); // keep existing if already set
+                setLiveAgentState(current => {
+                    if (current) setFinalStats(current);
+                    return current;
+                });
                 setGameState('FINISHED');
                 setTimeLeft(10);
                 setMatchCount(c => c + 1);
@@ -201,8 +209,13 @@ export default function Arena() {
         return matchResult.winner || null;
     }, [matchResult, currentMatch]);
 
-    const getEquipmentBonus = (agentId) => {
-        const inv = inventories[agentId];
+    // Equipment bonus now comes from backend match data (real equipment system)
+    const getEquipmentBonus = (agent) => {
+        if (!agent) return null;
+        // Backend sends equipmentBonus directly from the agent's real equipment
+        if (agent.equipmentBonus) return agent.equipmentBonus;
+        // Fallback: try frontend inventory context (for user-owned agents)
+        const inv = inventories[agent.id];
         return inv ? calculateEquipmentBonus(Object.values(inv.equipped).filter(Boolean)) : null;
     };
 
@@ -376,15 +389,46 @@ export default function Arena() {
                                             <Zap size={10} /> {currentMatch.agent1.powerRating}
                                         </span>
                                     </div>
-                                    {liveAgentState?.['1'] && (
-                                        <div className="competitor-hp-bar">
-                                            <div className="competitor-hp-fill" style={{
-                                                width: `${(liveAgentState['1'].hp / liveAgentState['1'].maxHp) * 100}%`,
-                                                background: liveAgentState['1'].hp / liveAgentState['1'].maxHp > 0.5 ? 'var(--gradient-success)' : liveAgentState['1'].hp / liveAgentState['1'].maxHp > 0.25 ? 'var(--gradient-gold)' : 'var(--gradient-danger)',
-                                            }} />
-                                            <span className="competitor-hp-text">{Math.round(liveAgentState['1'].hp)} HP</span>
+                                    {currentMatch.agent1.equippedItems?.length > 0 && (
+                                        <div className="competitor-equipment">
+                                            {currentMatch.agent1.equippedItems.map(item => (
+                                                <span key={item.slot} className={`equipment-icon equipment-icon--${item.rarity}`} title={`${item.name} (${item.rarity})`}>
+                                                    {item.icon}
+                                                </span>
+                                            ))}
+                                            {currentMatch.agent1.equipmentPower > 0 && (
+                                                <span className="equipment-power-badge">
+                                                    <Shield size={9} /> +{currentMatch.agent1.equipmentPower}
+                                                </span>
+                                            )}
                                         </div>
                                     )}
+                                    {liveAgentState?.['1'] && (() => {
+                                        const hp = liveAgentState['1'].hp;
+                                        const maxHp = liveAgentState['1'].maxHp;
+                                        const pct = Math.max(0, hp / maxHp);
+                                        const hpClass = pct > 0.6 ? 'hp-high' : pct > 0.3 ? 'hp-mid' : 'hp-low';
+                                        return (
+                                            <div className={`competitor-hp-container ${hpClass}`}>
+                                                <div className="competitor-hp-header">
+                                                    <span className="competitor-hp-label">HP</span>
+                                                    <span className="competitor-hp-value">{Math.round(hp)} / {maxHp}</span>
+                                                    <span className={`competitor-hp-pct ${hpClass}`}>{Math.round(pct * 100)}%</span>
+                                                </div>
+                                                <div className="competitor-hp-bar">
+                                                    <div className="competitor-hp-fill" style={{ width: `${pct * 100}%` }} />
+                                                    <div className="competitor-hp-shine" />
+                                                </div>
+                                                {liveAgentState['1'].specialMeter > 0 && (
+                                                    <div className="competitor-special-bar">
+                                                        <div className={`competitor-special-fill ${liveAgentState['1'].specialReady ? 'special-ready' : ''}`}
+                                                             style={{ width: `${liveAgentState['1'].specialMeter}%` }} />
+                                                        {liveAgentState['1'].specialReady && <span className="special-ready-text">SPECIAL</span>}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             </div>
 
@@ -422,15 +466,46 @@ export default function Arena() {
                                         <span className="competitor-weapon">{currentMatch.agent2.weapon?.icon || '👊'}</span>
                                         <span className="competitor-rank">#{currentMatch.agent2.rank}</span>
                                     </div>
-                                    {liveAgentState?.['2'] && (
-                                        <div className="competitor-hp-bar">
-                                            <div className="competitor-hp-fill" style={{
-                                                width: `${(liveAgentState['2'].hp / liveAgentState['2'].maxHp) * 100}%`,
-                                                background: liveAgentState['2'].hp / liveAgentState['2'].maxHp > 0.5 ? 'var(--gradient-success)' : liveAgentState['2'].hp / liveAgentState['2'].maxHp > 0.25 ? 'var(--gradient-gold)' : 'var(--gradient-danger)',
-                                            }} />
-                                            <span className="competitor-hp-text">{Math.round(liveAgentState['2'].hp)} HP</span>
+                                    {currentMatch.agent2.equippedItems?.length > 0 && (
+                                        <div className="competitor-equipment">
+                                            {currentMatch.agent2.equippedItems.map(item => (
+                                                <span key={item.slot} className={`equipment-icon equipment-icon--${item.rarity}`} title={`${item.name} (${item.rarity})`}>
+                                                    {item.icon}
+                                                </span>
+                                            ))}
+                                            {currentMatch.agent2.equipmentPower > 0 && (
+                                                <span className="equipment-power-badge">
+                                                    <Shield size={9} /> +{currentMatch.agent2.equipmentPower}
+                                                </span>
+                                            )}
                                         </div>
                                     )}
+                                    {liveAgentState?.['2'] && (() => {
+                                        const hp = liveAgentState['2'].hp;
+                                        const maxHp = liveAgentState['2'].maxHp;
+                                        const pct = Math.max(0, hp / maxHp);
+                                        const hpClass = pct > 0.6 ? 'hp-high' : pct > 0.3 ? 'hp-mid' : 'hp-low';
+                                        return (
+                                            <div className={`competitor-hp-container ${hpClass}`}>
+                                                <div className="competitor-hp-header">
+                                                    <span className="competitor-hp-label">HP</span>
+                                                    <span className="competitor-hp-value">{Math.round(hp)} / {maxHp}</span>
+                                                    <span className={`competitor-hp-pct ${hpClass}`}>{Math.round(pct * 100)}%</span>
+                                                </div>
+                                                <div className="competitor-hp-bar">
+                                                    <div className="competitor-hp-fill" style={{ width: `${pct * 100}%` }} />
+                                                    <div className="competitor-hp-shine" />
+                                                </div>
+                                                {liveAgentState['2'].specialMeter > 0 && (
+                                                    <div className="competitor-special-bar">
+                                                        <div className={`competitor-special-fill ${liveAgentState['2'].specialReady ? 'special-ready' : ''}`}
+                                                             style={{ width: `${liveAgentState['2'].specialMeter}%` }} />
+                                                        {liveAgentState['2'].specialReady && <span className="special-ready-text">SPECIAL</span>}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                                 <div className="competitor-avatar" style={{
                                     borderColor: currentMatch.agent2.color,
@@ -481,21 +556,229 @@ export default function Arena() {
                         {/* LIVE or FINISHED */}
                         {(gameState === 'LIVE' || gameState === 'FINISHED') && (
                             <div className="game-canvas-container">
-                                {gameState === 'FINISHED' && matchResult && winnerAgent && (
-                                    <div className="arena-result-banner" style={{ '--winner-color': winnerAgent.color }}>
-                                        <div className="arena-result-banner__content">
-                                            <span className="arena-result-banner__trophy">🏆</span>
-                                            <div className="arena-result-banner__info">
-                                                <span className="arena-result-banner__winner" style={{ color: winnerAgent.color }}>
-                                                    {winnerAgent.name} WINS!
-                                                </span>
-                                                <span className="arena-result-banner__reason">
-                                                    {(matchResult.method || matchResult.reason || '').toLowerCase().includes('ko') ? '💀 KNOCKOUT' 
-                                                        : (matchResult.method || matchResult.reason || '').toLowerCase().includes('decision') ? '⚖️ DECISION' 
-                                                        : '⏱️ TIME OUT'}
-                                                    {matchResult.duration ? ` · ${matchResult.duration}s` : ''}
-                                                </span>
+                                {gameState === 'FINISHED' && matchResult && winnerAgent && currentMatch && (
+                                    <div className="match-result-overlay" style={{ '--winner-color': winnerAgent.color }}>
+                                        {/* Winner Announcement */}
+                                        <div className="result-header">
+                                            <div className="result-header__trophy">🏆</div>
+                                            <div className="result-header__text">
+                                                <h2 className="result-header__winner" style={{ color: winnerAgent.color }}>
+                                                    {winnerAgent.avatar} {winnerAgent.name} WINS!
+                                                </h2>
+                                                <div className="result-header__method">
+                                                    {(matchResult.method || '').toLowerCase().includes('ko') ? '💀 KNOCKOUT' 
+                                                        : (matchResult.method || '').toLowerCase().includes('technical') ? '🔥 TECHNICAL KO'
+                                                        : '⚖️ DECISION'}
+                                                    <span className="result-header__duration">
+                                                        <Timer size={11} /> {matchResult.duration || '—'}s
+                                                    </span>
+                                                </div>
                                             </div>
+                                        </div>
+
+                                        {/* Fighter Comparison */}
+                                        <div className="result-comparison">
+                                            {/* Agent 1 Column */}
+                                            <div className={`result-fighter ${matchResult.winnerId === '1' ? 'result-fighter--winner' : 'result-fighter--loser'}`}>
+                                                <div className="result-fighter__avatar" style={{ borderColor: currentMatch.agent1.color }}>
+                                                    {currentMatch.agent1.avatar}
+                                                </div>
+                                                <span className="result-fighter__name" style={{ color: currentMatch.agent1.color }}>
+                                                    {currentMatch.agent1.name}
+                                                </span>
+                                                {matchResult.winnerId === '1' && <span className="result-fighter__crown">👑</span>}
+                                            </div>
+
+                                            {/* Stats Label Column */}
+                                            <div className="result-stats-labels">
+                                                <span className="result-stat-label">HP Remaining</span>
+                                                <span className="result-stat-label">Power Rating</span>
+                                                <span className="result-stat-label">Equipment Power</span>
+                                                <span className="result-stat-label">Hits Landed</span>
+                                                <span className="result-stat-label">Critical Hits</span>
+                                                <span className="result-stat-label">Max Combo</span>
+                                                <span className="result-stat-label">Dodges</span>
+                                            </div>
+
+                                            {/* Agent 2 Column */}
+                                            <div className={`result-fighter ${matchResult.winnerId === '2' ? 'result-fighter--winner' : 'result-fighter--loser'}`}>
+                                                <div className="result-fighter__avatar" style={{ borderColor: currentMatch.agent2.color }}>
+                                                    {currentMatch.agent2.avatar}
+                                                </div>
+                                                <span className="result-fighter__name" style={{ color: currentMatch.agent2.color }}>
+                                                    {currentMatch.agent2.name}
+                                                </span>
+                                                {matchResult.winnerId === '2' && <span className="result-fighter__crown">👑</span>}
+                                            </div>
+                                        </div>
+
+                                        {/* Stat Bars */}
+                                        {(() => {
+                                            const s1 = finalStats?.['1'] || liveAgentState?.['1'] || {};
+                                            const s2 = finalStats?.['2'] || liveAgentState?.['2'] || {};
+                                            const a1 = currentMatch.agent1;
+                                            const a2 = currentMatch.agent2;
+
+                                            const stats = [
+                                                {
+                                                    label: 'HP Remaining',
+                                                    v1: Math.round(s1.hp || 0),
+                                                    v2: Math.round(s2.hp || 0),
+                                                    max: Math.max(s1.maxHp || 400, s2.maxHp || 400),
+                                                    format: (v, agent, side) => {
+                                                        const maxHp = side === 1 ? (s1.maxHp || 400) : (s2.maxHp || 400);
+                                                        return `${v} / ${maxHp}`;
+                                                    },
+                                                },
+                                                {
+                                                    label: 'Power Rating',
+                                                    v1: a1.powerRating || 0,
+                                                    v2: a2.powerRating || 0,
+                                                    max: Math.max(a1.powerRating || 1, a2.powerRating || 1) * 1.2,
+                                                },
+                                                {
+                                                    label: 'Equipment Power',
+                                                    v1: a1.equipmentPower || 0,
+                                                    v2: a2.equipmentPower || 0,
+                                                    max: Math.max(a1.equipmentPower || 1, a2.equipmentPower || 1, 1) * 1.2,
+                                                },
+                                                {
+                                                    label: 'Hits Landed',
+                                                    v1: s1.hitsLanded || 0,
+                                                    v2: s2.hitsLanded || 0,
+                                                    max: Math.max(s1.hitsLanded || 1, s2.hitsLanded || 1) * 1.2,
+                                                },
+                                                {
+                                                    label: 'Critical Hits',
+                                                    v1: s1.critHits || 0,
+                                                    v2: s2.critHits || 0,
+                                                    max: Math.max(s1.critHits || 1, s2.critHits || 1, 1) * 1.2,
+                                                },
+                                                {
+                                                    label: 'Max Combo',
+                                                    v1: s1.maxCombo || 0,
+                                                    v2: s2.maxCombo || 0,
+                                                    max: Math.max(s1.maxCombo || 1, s2.maxCombo || 1, 1) * 1.2,
+                                                },
+                                                {
+                                                    label: 'Dodges',
+                                                    v1: s1.dodges || 0,
+                                                    v2: s2.dodges || 0,
+                                                    max: Math.max(s1.dodges || 1, s2.dodges || 1, 1) * 1.2,
+                                                },
+                                            ];
+
+                                            return (
+                                                <div className="result-stat-bars">
+                                                    {stats.map((stat) => {
+                                                        const w1 = stat.max > 0 ? (stat.v1 / stat.max) * 100 : 0;
+                                                        const w2 = stat.max > 0 ? (stat.v2 / stat.max) * 100 : 0;
+                                                        const lead1 = stat.v1 > stat.v2;
+                                                        const lead2 = stat.v2 > stat.v1;
+                                                        const display1 = stat.format ? stat.format(stat.v1, a1, 1) : stat.v1;
+                                                        const display2 = stat.format ? stat.format(stat.v2, a2, 2) : stat.v2;
+
+                                                        return (
+                                                            <div key={stat.label} className="result-stat-row">
+                                                                <div className="result-stat-row__left">
+                                                                    <span className={`result-stat-row__val ${lead1 ? 'result-stat-row__val--lead' : ''}`}
+                                                                          style={lead1 ? { color: a1.color } : {}}>
+                                                                        {display1}
+                                                                    </span>
+                                                                    <div className="result-stat-row__bar result-stat-row__bar--left">
+                                                                        <div className="result-stat-row__fill result-stat-row__fill--left"
+                                                                             style={{ width: `${Math.min(100, w1)}%`, background: a1.color }} />
+                                                                    </div>
+                                                                </div>
+                                                                <span className="result-stat-row__label">{stat.label}</span>
+                                                                <div className="result-stat-row__right">
+                                                                    <div className="result-stat-row__bar result-stat-row__bar--right">
+                                                                        <div className="result-stat-row__fill result-stat-row__fill--right"
+                                                                             style={{ width: `${Math.min(100, w2)}%`, background: a2.color }} />
+                                                                    </div>
+                                                                    <span className={`result-stat-row__val ${lead2 ? 'result-stat-row__val--lead' : ''}`}
+                                                                          style={lead2 ? { color: a2.color } : {}}>
+                                                                        {display2}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })()}
+
+                                        {/* Deciding Factors */}
+                                        <div className="result-factors">
+                                            <span className="result-factors__title">
+                                                <BarChart3 size={12} /> Deciding Factors
+                                            </span>
+                                            <div className="result-factors__list">
+                                                {(() => {
+                                                    const factors = [];
+                                                    const s1 = finalStats?.['1'] || liveAgentState?.['1'] || {};
+                                                    const s2 = finalStats?.['2'] || liveAgentState?.['2'] || {};
+                                                    const a1 = currentMatch.agent1;
+                                                    const a2 = currentMatch.agent2;
+                                                    const wId = matchResult.winnerId;
+                                                    const w = wId === '1' ? a1 : a2;
+                                                    const ws = wId === '1' ? s1 : s2;
+                                                    const ls = wId === '1' ? s2 : s1;
+
+                                                    if ((matchResult.method || '').toLowerCase().includes('ko')) {
+                                                        factors.push({ icon: '💀', text: `${w.name} delivered a devastating knockout blow` });
+                                                    } else {
+                                                        factors.push({ icon: '⚖️', text: `Winner decided by remaining HP and damage score` });
+                                                    }
+
+                                                    if ((ws.hitsLanded || 0) > (ls.hitsLanded || 0)) {
+                                                        factors.push({ icon: '🎯', text: `${w.name} landed more hits (${ws.hitsLanded || 0} vs ${ls.hitsLanded || 0})` });
+                                                    }
+                                                    if ((ws.critHits || 0) > (ls.critHits || 0)) {
+                                                        factors.push({ icon: '💥', text: `Superior critical hit rate (${ws.critHits || 0} crits)` });
+                                                    }
+                                                    if ((w.equipmentPower || 0) > 30) {
+                                                        factors.push({ icon: '⚔️', text: `Strong equipment loadout (+${w.equipmentPower} power)` });
+                                                    }
+                                                    if ((ws.maxCombo || 0) >= 3) {
+                                                        factors.push({ icon: '🔥', text: `${ws.maxCombo}x max combo dealt massive burst damage` });
+                                                    }
+                                                    if (factors.length < 3) {
+                                                        factors.push({ icon: '🏆', text: `Higher overall combat effectiveness determined the outcome` });
+                                                    }
+
+                                                    return factors.slice(0, 4).map((f, i) => (
+                                                        <div key={i} className="result-factor">
+                                                            <span className="result-factor__icon">{f.icon}</span>
+                                                            <span className="result-factor__text">{f.text}</span>
+                                                        </div>
+                                                    ));
+                                                })()}
+                                            </div>
+                                        </div>
+
+                                        {/* Reward Info */}
+                                        {(matchResult.monEarned > 0 || matchResult.totalBets > 0) && (
+                                            <div className="result-rewards">
+                                                {matchResult.monEarned > 0 && (
+                                                    <div className="result-reward-item">
+                                                        <Zap size={12} />
+                                                        <span>Winner Reward: <strong>{matchResult.monEarned} MON</strong></span>
+                                                    </div>
+                                                )}
+                                                {matchResult.totalBets > 0 && (
+                                                    <div className="result-reward-item">
+                                                        <TrendingUp size={12} />
+                                                        <span>Total Bets: <strong>{matchResult.totalBets} MON</strong></span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Next Match Timer */}
+                                        <div className="result-next-match">
+                                            <Clock size={12} />
+                                            <span>Next match in <strong>{timeLeft}s</strong></span>
                                         </div>
                                     </div>
                                 )}
@@ -506,8 +789,8 @@ export default function Arena() {
                                         onStateUpdate={handleStateUpdate}
                                         onMatchEnd={handleMatchEnd}
                                         isPlaying={gameState === 'LIVE'}
-                                        agent1Equipment={getEquipmentBonus(currentMatch?.agent1?.id)}
-                                        agent2Equipment={getEquipmentBonus(currentMatch?.agent2?.id)}
+                                        agent1Equipment={getEquipmentBonus(currentMatch?.agent1)}
+                                        agent2Equipment={getEquipmentBonus(currentMatch?.agent2)}
                                     />
                             </div>
                         )}

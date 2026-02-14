@@ -8,24 +8,35 @@
 const { v4: uuidv4 } = require('uuid');
 const logger = require('./logger');
 const blockchain = require('./blockchain');
+const { generateAgentEquipment, calculateEquipmentBonus, calculateEquipmentPower, SHOP_ITEMS_BY_ID } = require('../data/shop-items');
 
 // Simulation agents (used when not enough real agents)
 const SIM_AGENTS = [
-    { id: 'sim-a1', name: 'ShadowStrike', avatar: '🗡️', color: '#FF2D78', rank: 1, wins: 47, losses: 12, powerRating: 94, weapon: { name: 'Dark Blade', icon: '🗡️' }, isSimulated: true },
-    { id: 'sim-a2', name: 'IronGuard', avatar: '🛡️', color: '#00F5FF', rank: 2, wins: 41, losses: 15, powerRating: 89, weapon: { name: 'Iron Shield', icon: '🛡️' }, isSimulated: true },
-    { id: 'sim-a3', name: 'VoidWalker', avatar: '🌀', color: '#836EF9', rank: 3, wins: 38, losses: 18, powerRating: 87, weapon: { name: 'Void Staff', icon: '🌀' }, isSimulated: true },
-    { id: 'sim-a4', name: 'PyroBlitz', avatar: '🔥', color: '#FF6B35', rank: 4, wins: 35, losses: 20, powerRating: 83, weapon: { name: 'Flame Gauntlet', icon: '🔥' }, isSimulated: true },
-    { id: 'sim-a5', name: 'FrostByte', avatar: '❄️', color: '#69D2E7', rank: 5, wins: 32, losses: 22, powerRating: 80, weapon: { name: 'Ice Shard', icon: '❄️' }, isSimulated: true },
-    { id: 'sim-a6', name: 'ThunderClap', avatar: '⚡', color: '#FFE93E', rank: 6, wins: 29, losses: 25, powerRating: 76, weapon: { name: 'Storm Hammer', icon: '⚡' }, isSimulated: true },
-    { id: 'sim-a7', name: 'NightReaper', avatar: '💀', color: '#9B59B6', rank: 7, wins: 26, losses: 28, powerRating: 72, weapon: { name: 'Soul Scythe', icon: '💀' }, isSimulated: true },
-    { id: 'sim-a8', name: 'TitanForce', avatar: '🦾', color: '#2ECC71', rank: 8, wins: 23, losses: 30, powerRating: 68, weapon: { name: 'Power Fist', icon: '🦾' }, isSimulated: true },
+    { id: 'sim-a1', name: 'ShadowStrike', avatar: '🗡️', color: '#FF2D78', rank: 1, wins: 47, losses: 12, basePowerRating: 94, weapon: { name: 'Dark Blade', icon: '🗡️' }, isSimulated: true },
+    { id: 'sim-a2', name: 'IronGuard', avatar: '🛡️', color: '#00F5FF', rank: 2, wins: 41, losses: 15, basePowerRating: 89, weapon: { name: 'Iron Shield', icon: '🛡️' }, isSimulated: true },
+    { id: 'sim-a3', name: 'VoidWalker', avatar: '🌀', color: '#836EF9', rank: 3, wins: 38, losses: 18, basePowerRating: 87, weapon: { name: 'Void Staff', icon: '🌀' }, isSimulated: true },
+    { id: 'sim-a4', name: 'PyroBlitz', avatar: '🔥', color: '#FF6B35', rank: 4, wins: 35, losses: 20, basePowerRating: 83, weapon: { name: 'Flame Gauntlet', icon: '🔥' }, isSimulated: true },
+    { id: 'sim-a5', name: 'FrostByte', avatar: '❄️', color: '#69D2E7', rank: 5, wins: 32, losses: 22, basePowerRating: 80, weapon: { name: 'Ice Shard', icon: '❄️' }, isSimulated: true },
+    { id: 'sim-a6', name: 'ThunderClap', avatar: '⚡', color: '#FFE93E', rank: 6, wins: 29, losses: 25, basePowerRating: 76, weapon: { name: 'Storm Hammer', icon: '⚡' }, isSimulated: true },
+    { id: 'sim-a7', name: 'NightReaper', avatar: '💀', color: '#9B59B6', rank: 7, wins: 26, losses: 28, basePowerRating: 72, weapon: { name: 'Soul Scythe', icon: '💀' }, isSimulated: true },
+    { id: 'sim-a8', name: 'TitanForce', avatar: '🦾', color: '#2ECC71', rank: 8, wins: 23, losses: 30, basePowerRating: 68, weapon: { name: 'Power Fist', icon: '🦾' }, isSimulated: true },
 ];
+
+// ── Generate equipment for each SIM_AGENT on startup ──
+SIM_AGENTS.forEach(agent => {
+    const { equipped, bonus, equipmentPower } = generateAgentEquipment(agent.rank, SIM_AGENTS.length);
+    agent.equipment = equipped;          // { weapon: item, armor: item, ... }
+    agent.equipmentBonus = bonus;        // { damage: X, defense: Y, ... }
+    agent.equipmentPower = equipmentPower;
+    agent.powerRating = agent.basePowerRating + Math.round(equipmentPower * 0.3); // Equipment affects power rating
+    logger.info(`[AutoMatchmaker] ${agent.name} equipped (power: ${agent.basePowerRating} + ${Math.round(equipmentPower * 0.3)} = ${agent.powerRating})`);
+});
 
 // Match phases timing (milliseconds)
 const BETTING_DURATION = 30000;    // 30s betting window
-const FIGHT_DURATION = 45000;      // 45s fight
-const RESULT_DURATION = 10000;     // 10s show result
-const COOLDOWN_DURATION = 5000;    // 5s between matches
+const FIGHT_DURATION = 195000;     // 195s fight (3 rounds × 60s + pauses + buffer)
+const RESULT_DURATION = 6000;      // 6s show result (was 10s)
+const COOLDOWN_DURATION = 3000;    // 3s between matches (was 5s)
 
 class AutoMatchmaker {
     constructor(io) {
@@ -172,15 +183,36 @@ class AutoMatchmaker {
     }
 
     async _endFight() {
-        // Determine winner based on power rating + randomness
+        // ── Determine winner based on power rating + equipment + randomness ──
         const a1 = this.currentMatch.agent1;
         const a2 = this.currentMatch.agent2;
-        const a1Score = a1.powerRating + Math.random() * 40;
-        const a2Score = a2.powerRating + Math.random() * 40;
+
+        // Base score from power rating (already includes equipment power)
+        let a1Score = a1.powerRating + Math.random() * 40;
+        let a2Score = a2.powerRating + Math.random() * 40;
+
+        // Additional combat-relevant equipment bonuses affect outcome
+        const eb1 = a1.equipmentBonus || {};
+        const eb2 = a2.equipmentBonus || {};
+
+        // Offensive bonus: damage, critChance, lifesteal contribute to winning
+        a1Score += (eb1.damage || 0) * 0.4 + (eb1.critChance || 0) * 0.3 + (eb1.lifesteal || 0) * 0.2;
+        a2Score += (eb2.damage || 0) * 0.4 + (eb2.critChance || 0) * 0.3 + (eb2.lifesteal || 0) * 0.2;
+
+        // Defensive bonus: defense, maxHP, dodgeChance help survive
+        a1Score += (eb1.defense || 0) * 0.3 + (eb1.maxHP || 0) * 0.05 + (eb1.dodgeChance || 0) * 0.25;
+        a2Score += (eb2.defense || 0) * 0.3 + (eb2.maxHP || 0) * 0.05 + (eb2.dodgeChance || 0) * 0.25;
+
+        // Speed & utility
+        a1Score += (eb1.speed || 0) * 0.15 + (eb1.attackSpeed || 0) * 0.1;
+        a2Score += (eb2.speed || 0) * 0.15 + (eb2.attackSpeed || 0) * 0.1;
+
         const winnerId = a1Score >= a2Score ? '1' : '2';
         const winner = winnerId === '1' ? a1 : a2;
         const loser = winnerId === '1' ? a2 : a1;
-        const method = ['KO', 'Decision', 'Technical KO'][Math.floor(Math.random() * 3)];
+
+        // Method: always Decision (KO removed)
+        const method = 'Decision';
 
         const result = {
             matchId: this.currentMatch.id,
@@ -243,6 +275,23 @@ class AutoMatchmaker {
     }
 
     _formatAgent(agent) {
+        // Build equipment summary for frontend display
+        const equippedItems = [];
+        if (agent.equipment) {
+            for (const [slot, item] of Object.entries(agent.equipment)) {
+                if (item) {
+                    equippedItems.push({
+                        slot,
+                        id: item.id,
+                        name: item.name,
+                        rarity: item.rarity,
+                        icon: item.icon || '📦',
+                        category: item.category,
+                    });
+                }
+            }
+        }
+
         return {
             id: agent.id,
             name: agent.name,
@@ -252,8 +301,13 @@ class AutoMatchmaker {
             wins: agent.wins || 0,
             losses: agent.losses || 0,
             powerRating: agent.powerRating || 50,
+            basePowerRating: agent.basePowerRating || agent.powerRating || 50,
             weapon: agent.weapon || { name: 'Fists', icon: '👊' },
             isSimulated: !!agent.isSimulated,
+            // Equipment data — used by frontend GameEngine for combat bonuses
+            equipmentBonus: agent.equipmentBonus || null,
+            equipmentPower: agent.equipmentPower || 0,
+            equippedItems,
         };
     }
 
