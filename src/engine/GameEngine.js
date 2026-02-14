@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
-// GAME ENGINE v2 — Enhanced Combat with Inventory Effects
-// Combo system, critical hits, elemental effects, special moves
+// GAME ENGINE v3 — Fast-Paced Arena Combat
+// Aggressive AI, combos, crits, comeback mechanics, specials
+// Synced to 45s backend FIGHT_DURATION (3 rounds × ~13s + pauses)
 // ═══════════════════════════════════════════════════════════════
 
 import Matter from 'matter-js';
@@ -18,30 +19,31 @@ export class GameEngine {
         this.particles = [];
         this.hitEffects = [];
         this.comboEffects = [];
-        this.elementEffects = [];
         this.shakeIntensity = 0;
         this.gameTime = 0;
         this.isRunning = false;
         this.isFinished = false;
+        this.isPaused = false;
         this.winner = null;
         this.finishReason = null;
+        this.finishTime = 0;
 
-        // Match timing — must match backend FIGHT_DURATION (45s total)
-        // 3 rounds × 13s = 39s fighting + ~6s round pauses = ~45s total
+        // Match timing — synced to backend FIGHT_DURATION (45s)
         this.roundTime = 13;
         this.currentRound = 1;
         this.maxRounds = 3;
         this.roundTimer = this.roundTime;
         this.roundPauseUntil = 0;
+        this.roundJustStarted = 0;    // timestamp when current round started (for "ROUND X" overlay)
+
+        // Momentum: tracks who is dominating
+        this.momentum = { '1': 0, '2': 0 };
 
         // Callbacks
         this.onHit = null;
         this.onUpdate = null;
         this.onGameEnd = null;
         this.onRoundEnd = null;
-        this.onCombo = null;
-        this.onCritical = null;
-        this.onSpecialMove = null;
 
         this._createBounds();
     }
@@ -61,8 +63,8 @@ export class GameEngine {
     addAgent(id, x, y, color, equipmentBonus = null) {
         const body = Bodies.circle(x, y, 28, {
             label: `agent-${id}`,
-            frictionAir: 0.05,
-            restitution: 0.6,
+            frictionAir: 0.04,
+            restitution: 0.7,
             density: 0.002,
         });
 
@@ -78,16 +80,15 @@ export class GameEngine {
             bodyB: weaponBody,
             pointA: { x: 20, y: 0 },
             pointB: { x: -weaponLength / 2, y: 0 },
-            stiffness: 0.3,
-            damping: 0.1,
+            stiffness: 0.35,
+            damping: 0.08,
             length: 5,
         });
 
         Composite.add(this.world, [body, weaponBody, constraint]);
 
-        // Apply equipment bonuses
         const eb = equipmentBonus || {};
-        const baseHP = 200;
+        const baseHP = 160;  // Lower HP = faster fights
         const maxHp = baseHP + (eb.maxHP || 0);
 
         this.agents[id] = {
@@ -98,7 +99,7 @@ export class GameEngine {
             score: 0,
             lastAttack: 0,
             isAttacking: false,
-            attackCooldown: Math.max(400, 800 - (eb.attackSpeed || 0) * 20),
+            attackCooldown: Math.max(250, 420 - (eb.attackSpeed || 0) * 20), // Faster attacks
             weaponLength,
             invincible: 0,
 
@@ -106,8 +107,8 @@ export class GameEngine {
             bonusDamage: eb.damage || 0,
             defense: eb.defense || 0,
             speedBonus: eb.speed || 0,
-            critChance: eb.critChance || 5,      // base 5%
-            critDamage: 150 + (eb.critDamage || 0), // base 150%
+            critChance: 8 + (eb.critChance || 0),      // Higher base crit
+            critDamage: 160 + (eb.critDamage || 0),
             lifesteal: eb.lifesteal || 0,
             dodgeChance: eb.dodgeChance || 0,
             burnDamage: eb.burnDamage || 0,
@@ -122,8 +123,8 @@ export class GameEngine {
             combo: 0,
             maxCombo: 0,
             lastHitTime: 0,
-            comboWindowMs: 2000,
-            specialMeter: 0,     // builds to 100
+            comboWindowMs: 2500,   // Wider combo window
+            specialMeter: 0,
             specialReady: false,
             isDefending: false,
             defendUntil: 0,
@@ -136,13 +137,16 @@ export class GameEngine {
             hitsLanded: 0,
             critHits: 0,
             dodges: 0,
+
+            // Personality (randomized per agent for variety)
+            personality: {
+                baseAggression: 0.55 + Math.random() * 0.3,
+                preferMelee: Math.random() > 0.5,
+                defensive: Math.random() < 0.25,
+            },
         };
 
-        this.weapons[id] = {
-            body: weaponBody,
-            constraint,
-        };
-
+        this.weapons[id] = { body: weaponBody, constraint };
         return this.agents[id];
     }
 
@@ -150,7 +154,7 @@ export class GameEngine {
         const agent = this.agents[id];
         const otherId = Object.keys(this.agents).find(k => k !== id);
         if (!agent || !otherId) return;
-        if (agent.stunUntil > this.gameTime) return; // Stunned, can't act
+        if (agent.stunUntil > this.gameTime) return;
 
         const other = this.agents[otherId];
         const pos = agent.body.position;
@@ -159,100 +163,107 @@ export class GameEngine {
         const dy = otherPos.y - pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const angle = Math.atan2(dy, dx);
-
         const now = this.gameTime;
 
-        // Personality varies more per agent and changes during combat
+        // ── Dynamic aggression ──
         const hpPct = agent.hp / agent.maxHp;
         const otherHpPct = other.hp / other.maxHp;
-        let aggression = id === '1' ? 0.7 : 0.5;
+        let aggression = agent.personality.baseAggression;
 
-        // Get more aggressive when winning HP-wise
-        if (hpPct > otherHpPct + 0.2) aggression += 0.15;
-        // Get more defensive when losing
-        if (hpPct < otherHpPct - 0.2) aggression -= 0.15;
-        // Berserker mode at low HP
-        if (hpPct < 0.3 && agent.lowHPBonus > 0) aggression += 0.3;
-        // More aggressive with special ready
-        if (agent.specialReady) aggression += 0.2;
+        // Winning → push harder
+        if (hpPct > otherHpPct + 0.15) aggression += 0.15;
+        // Losing → get desperate
+        if (hpPct < otherHpPct - 0.15) aggression += 0.1;
+        // LOW HP BERSERKER MODE: Fight harder when close to death
+        if (hpPct < 0.25) aggression += 0.35;
+        // Smell blood: opponent is weak
+        if (otherHpPct < 0.2) aggression += 0.25;
+        // Special ready → more aggressive
+        if (agent.specialReady) aggression += 0.15;
+        // Momentum bonus
+        aggression += (this.momentum[id] || 0) * 0.05;
+        // Clamp
+        aggression = Math.min(1.0, Math.max(0.3, aggression));
 
-        // Speed factor from equipment
+        // Speed
         const speedMult = 1 + (agent.speedBonus || 0) * 0.01;
-        // Apply slow effect
         const slowMult = agent.slowUntil > this.gameTime ? 0.5 : 1;
         const totalSpeedMult = speedMult * slowMult;
 
-        const randomAngle = angle + (Math.random() - 0.5) * 1.0;
-        const speed = (2.5 + Math.random() * 2.0) * totalSpeedMult;
+        // ── Movement: Aggressive approach with flanking ──
+        const randomOffset = (Math.random() - 0.5) * 0.8;
+        const speed = (3.0 + Math.random() * 2.5) * totalSpeedMult;
 
-        // Movement
-        if (dist > 130) {
-            // Approach with flanking
-            const flankAngle = randomAngle + (Math.random() > 0.6 ? (Math.PI / 4) * (Math.random() > 0.5 ? 1 : -1) : 0);
+        if (dist > 150) {
+            // Sprint towards opponent
+            const approachAngle = angle + randomOffset * 0.3;
             Body.applyForce(agent.body, pos, {
-                x: Math.cos(flankAngle) * 0.0008 * speed,
-                y: Math.sin(flankAngle) * 0.0008 * speed,
+                x: Math.cos(approachAngle) * 0.001 * speed,
+                y: Math.sin(approachAngle) * 0.001 * speed,
             });
-        } else if (dist < 55) {
-            // Close range — dodge or continue aggression
-            if (Math.random() > aggression) {
-                // Dodge backwards
+        } else if (dist > 80) {
+            // Medium range: approach with flanking
+            const flankDir = Math.sin(now / 800 + (id === '1' ? 0 : Math.PI)) * 0.8;
+            const moveAngle = angle + flankDir;
+            Body.applyForce(agent.body, pos, {
+                x: Math.cos(moveAngle) * 0.0008 * speed,
+                y: Math.sin(moveAngle) * 0.0008 * speed,
+            });
+        } else if (dist < 50) {
+            // Very close: sometimes retreat, sometimes go all in
+            if (Math.random() > aggression * 0.8) {
                 Body.applyForce(agent.body, pos, {
-                    x: -Math.cos(angle) * 0.0012 * totalSpeedMult,
-                    y: -Math.sin(angle) * 0.0012 * totalSpeedMult,
+                    x: -Math.cos(angle) * 0.001 * totalSpeedMult,
+                    y: -Math.sin(angle) * 0.001 * totalSpeedMult,
                 });
-                // Try dodge roll
-                if (Math.random() < 0.1 && !agent.isDodging) {
+                if (Math.random() < 0.15 && !agent.isDodging) {
                     this._dodge(id);
                 }
             }
         }
 
-        // Defend decision
-        if (dist < 100 && Math.random() < (1 - aggression) * 0.06 && !agent.isDefending) {
+        // ── Defend decision (less frequent, more tactical) ──
+        if (dist < 90 && Math.random() < (1 - aggression) * 0.04 && !agent.isDefending && !agent.isAttacking) {
             this._defend(id);
         }
 
-        // Attack logic — more varied
-        if (dist < 140 && now - agent.lastAttack > agent.attackCooldown) {
-            const attackRoll = Math.random();
-            if (attackRoll < aggression * 0.18) {
-                // Normal attack
-                this._attack(id, angle);
-            } else if (attackRoll < aggression * 0.04 && agent.specialReady) {
-                // Special move!
+        // ── Attack logic: More frequent, more variety ──
+        const canAttack = now - agent.lastAttack > agent.attackCooldown;
+        if (dist < 160 && canAttack) {
+            const roll = Math.random();
+
+            if (agent.specialReady && roll < 0.2) {
+                // SPECIAL MOVE (20% chance when ready)
                 this._specialAttack(id, angle);
+            } else if (roll < aggression * 0.35) {
+                // Normal attack (very frequent)
+                this._attack(id, angle);
+            } else if (roll < aggression * 0.08 + 0.05) {
+                // Heavy attack (occasional)
+                this._heavyAttack(id, angle);
             }
         }
 
-        // Heavy attack at medium range
-        if (dist > 80 && dist < 150 && Math.random() < 0.015 * aggression) {
+        // ── Finishing blow: when opponent is very low, relentless attack ──
+        if (otherHpPct < 0.15 && dist < 140 && canAttack) {
             this._heavyAttack(id, angle);
         }
 
-        // Random circle strafe (more frequent for fast agents)
-        if (Math.random() < 0.04 * totalSpeedMult) {
+        // ── Circle strafe (dynamic movement) ──
+        if (Math.random() < 0.06 * totalSpeedMult) {
             const strafeAngle = angle + Math.PI / 2 * (Math.random() > 0.5 ? 1 : -1);
             Body.applyForce(agent.body, pos, {
-                x: Math.cos(strafeAngle) * 0.0006 * totalSpeedMult,
-                y: Math.sin(strafeAngle) * 0.0006 * totalSpeedMult,
+                x: Math.cos(strafeAngle) * 0.0007 * totalSpeedMult,
+                y: Math.sin(strafeAngle) * 0.0007 * totalSpeedMult,
             });
         }
 
-        // Quick juke movement
-        if (Math.random() < 0.02) {
-            Body.applyForce(agent.body, pos, {
-                x: (Math.random() - 0.5) * 0.002 * totalSpeedMult,
-                y: (Math.random() - 0.5) * 0.002 * totalSpeedMult,
-            });
-        }
-
-        // Keep in bounds
-        const padding = 60;
-        if (pos.x < padding) Body.applyForce(agent.body, pos, { x: 0.001, y: 0 });
-        if (pos.x > this.width - padding) Body.applyForce(agent.body, pos, { x: -0.001, y: 0 });
-        if (pos.y < padding) Body.applyForce(agent.body, pos, { x: 0, y: 0.001 });
-        if (pos.y > this.height - padding) Body.applyForce(agent.body, pos, { x: 0, y: -0.001 });
+        // ── Keep in bounds ──
+        const padding = 50;
+        if (pos.x < padding) Body.applyForce(agent.body, pos, { x: 0.0015, y: 0 });
+        if (pos.x > this.width - padding) Body.applyForce(agent.body, pos, { x: -0.0015, y: 0 });
+        if (pos.y < padding) Body.applyForce(agent.body, pos, { x: 0, y: 0.0015 });
+        if (pos.y > this.height - padding) Body.applyForce(agent.body, pos, { x: 0, y: -0.0015 });
     }
 
     _attack(id, angle) {
@@ -263,14 +274,14 @@ export class GameEngine {
         agent.lastAttack = this.gameTime;
         agent.isAttacking = true;
 
-        const force = 0.015;
+        const force = 0.018;
         Body.applyForce(weapon.body, weapon.body.position, {
             x: Math.cos(angle) * force,
             y: Math.sin(angle) * force,
         });
-        Body.setAngularVelocity(weapon.body, (Math.random() > 0.5 ? 1 : -1) * 0.3);
+        Body.setAngularVelocity(weapon.body, (Math.random() > 0.5 ? 1 : -1) * 0.35);
 
-        setTimeout(() => { agent.isAttacking = false; }, 300);
+        setTimeout(() => { if (this.agents[id]) agent.isAttacking = false; }, 250);
     }
 
     _heavyAttack(id, angle) {
@@ -281,29 +292,28 @@ export class GameEngine {
         agent.lastAttack = this.gameTime;
         agent.isAttacking = true;
 
-        // Heavier force
-        const force = 0.025;
+        const force = 0.03;
         Body.applyForce(weapon.body, weapon.body.position, {
             x: Math.cos(angle) * force,
             y: Math.sin(angle) * force,
         });
-        Body.setAngularVelocity(weapon.body, (Math.random() > 0.5 ? 1 : -1) * 0.5);
+        Body.setAngularVelocity(weapon.body, (Math.random() > 0.5 ? 1 : -1) * 0.55);
 
-        // Sparks from windup
-        for (let i = 0; i < 4; i++) {
+        // Windup sparks
+        for (let i = 0; i < 3; i++) {
             this.particles.push({
-                x: agent.body.position.x,
-                y: agent.body.position.y,
-                vx: Math.cos(angle) * (2 + Math.random() * 4),
-                vy: Math.sin(angle) * (2 + Math.random() * 4),
-                life: 1,
+                x: agent.body.position.x + Math.cos(angle) * 20,
+                y: agent.body.position.y + Math.sin(angle) * 20,
+                vx: Math.cos(angle) * (2 + Math.random() * 3),
+                vy: Math.sin(angle) * (2 + Math.random() * 3),
+                life: 0.8,
                 color: '#FFE93E',
-                size: 1 + Math.random() * 3,
+                size: 1.5 + Math.random() * 2.5,
                 type: 'spark',
             });
         }
 
-        setTimeout(() => { agent.isAttacking = false; }, 500);
+        setTimeout(() => { if (this.agents[id]) agent.isAttacking = false; }, 400);
     }
 
     _specialAttack(id, angle) {
@@ -316,84 +326,80 @@ export class GameEngine {
         agent.lastAttack = this.gameTime;
         agent.isAttacking = true;
 
-        // Massive force
-        const force = 0.04;
+        const force = 0.045;
         Body.applyForce(weapon.body, weapon.body.position, {
             x: Math.cos(angle) * force,
             y: Math.sin(angle) * force,
         });
-        Body.setAngularVelocity(weapon.body, (Math.random() > 0.5 ? 1 : -1) * 0.8);
+        Body.setAngularVelocity(weapon.body, (Math.random() > 0.5 ? 1 : -1) * 0.9);
 
-        // Big particle burst
-        for (let i = 0; i < 16; i++) {
-            const a = (Math.PI * 2 / 16) * i;
+        // Dramatic particle burst
+        for (let i = 0; i < 20; i++) {
+            const a = (Math.PI * 2 / 20) * i;
             this.particles.push({
                 x: agent.body.position.x,
                 y: agent.body.position.y,
-                vx: Math.cos(a) * (3 + Math.random() * 5),
-                vy: Math.sin(a) * (3 + Math.random() * 5),
-                life: 1,
+                vx: Math.cos(a) * (4 + Math.random() * 6),
+                vy: Math.sin(a) * (4 + Math.random() * 6),
+                life: 1.2,
                 color: agent.color,
                 size: 3 + Math.random() * 5,
                 type: 'special',
             });
         }
 
-        // Screen shake
-        this.shakeIntensity = 12;
+        this.shakeIntensity = 15;
 
         this.comboEffects.push({
             x: agent.body.position.x,
-            y: agent.body.position.y - 50,
+            y: agent.body.position.y - 55,
             text: '⚡ SPECIAL!',
             time: this.gameTime,
             color: '#FFE93E',
-            size: 24,
+            size: 26,
         });
 
-        setTimeout(() => { agent.isAttacking = false; }, 600);
+        setTimeout(() => { if (this.agents[id]) agent.isAttacking = false; }, 500);
     }
 
     _defend(id) {
         const agent = this.agents[id];
         agent.isDefending = true;
-        agent.defendUntil = this.gameTime + 1200;
-        setTimeout(() => { agent.isDefending = false; }, 1200);
+        agent.defendUntil = this.gameTime + 800;
+        setTimeout(() => { if (this.agents[id]) agent.isDefending = false; }, 800);
     }
 
     _dodge(id) {
         const agent = this.agents[id];
         agent.isDodging = true;
-        agent.dodgeUntil = this.gameTime + 400;
+        agent.dodgeUntil = this.gameTime + 350;
         agent.dodges++;
 
-        // Quick dash in perpendicular direction
         const otherId = Object.keys(this.agents).find(k => k !== id);
         if (otherId) {
             const otherPos = this.agents[otherId].body.position;
             const angle = Math.atan2(otherPos.y - agent.body.position.y, otherPos.x - agent.body.position.x);
             const dodgeAngle = angle + (Math.PI / 2) * (Math.random() > 0.5 ? 1 : -1);
             Body.applyForce(agent.body, agent.body.position, {
-                x: Math.cos(dodgeAngle) * 0.003,
-                y: Math.sin(dodgeAngle) * 0.003,
+                x: Math.cos(dodgeAngle) * 0.004,
+                y: Math.sin(dodgeAngle) * 0.004,
             });
         }
 
-        // Afterimage particles
-        for (let i = 0; i < 5; i++) {
+        // Quick afterimage
+        for (let i = 0; i < 3; i++) {
             this.particles.push({
-                x: agent.body.position.x + (Math.random() - 0.5) * 20,
-                y: agent.body.position.y + (Math.random() - 0.5) * 20,
-                vx: 0,
-                vy: 0,
-                life: 0.7,
+                x: agent.body.position.x + (Math.random() - 0.5) * 15,
+                y: agent.body.position.y + (Math.random() - 0.5) * 15,
+                vx: 0, vy: 0,
+                life: 0.5,
                 color: agent.color,
-                size: 15 + Math.random() * 10,
+                size: 12 + Math.random() * 8,
                 type: 'afterimage',
             });
         }
 
-        setTimeout(() => { agent.isDodging = false; }, 400);
+        setTimeout(() => { if (this.agents[id]) agent.isDodging = false; }, 350);
     }
 
     _checkCollisions() {
@@ -413,17 +419,13 @@ export class GameEngine {
             const dist = Vector.magnitude(Vector.sub(weaponPos, otherPos));
             const weaponSpeed = Vector.magnitude(weapon.body.velocity);
 
-            if (dist < 38 && weaponSpeed > 2) {
+            if (dist < 38 && weaponSpeed > 2.5) {
                 // Dodge check
                 if (other.isDodging || (other.dodgeChance > 0 && Math.random() * 100 < other.dodgeChance)) {
-                    // Dodged!
                     this.comboEffects.push({
-                        x: otherPos.x,
-                        y: otherPos.y - 40,
-                        text: 'DODGE!',
-                        time: this.gameTime,
-                        color: '#00F5FF',
-                        size: 16,
+                        x: otherPos.x, y: otherPos.y - 40,
+                        text: 'DODGE!', time: this.gameTime,
+                        color: '#00F5FF', size: 16,
                     });
                     other.dodges++;
                     continue;
@@ -431,67 +433,65 @@ export class GameEngine {
 
                 // Defend check
                 if (other.isDefending) {
-                    const reducedDamage = Math.round(weaponSpeed * 0.5);
+                    const reducedDamage = Math.round(weaponSpeed * 0.4);
                     other.hp = Math.max(0, other.hp - reducedDamage);
-                    other.invincible = this.gameTime + 300;
+                    other.invincible = this.gameTime + 250;
 
                     this.comboEffects.push({
-                        x: otherPos.x,
-                        y: otherPos.y - 40,
-                        text: `🛡️ BLOCK -${reducedDamage}`,
-                        time: this.gameTime,
-                        color: '#836EF9',
-                        size: 14,
+                        x: otherPos.x, y: otherPos.y - 40,
+                        text: `🛡️ -${reducedDamage}`, time: this.gameTime,
+                        color: '#836EF9', size: 14,
                     });
 
-                    // Stun attacker briefly on block
-                    attacker.stunUntil = this.gameTime + 400;
+                    attacker.stunUntil = this.gameTime + 300;
 
-                    // Reflect damage
                     if (other.reflect > 0) {
                         const reflectDmg = Math.round(reducedDamage * other.reflect / 100);
                         attacker.hp = Math.max(0, attacker.hp - reflectDmg);
                     }
+                    // Small screen shake for blocks
+                    this.shakeIntensity = Math.max(this.shakeIntensity, 3);
                     continue;
                 }
 
                 // ── Calculate damage ──
-                let baseDamage = 8 + weaponSpeed * 2.5 + Math.random() * 5;
+                let baseDamage = 10 + weaponSpeed * 3.0 + Math.random() * 8;
 
-                // Equipment bonus damage
                 baseDamage += attacker.bonusDamage;
 
-                // Low HP bonus (berserker)
-                if (attacker.lowHPBonus > 0) {
-                    const hpPct = attacker.hp / attacker.maxHp;
-                    if (hpPct < 0.3) {
-                        baseDamage *= (1 + attacker.lowHPBonus / 100);
-                    }
+                // Low HP berserker bonus
+                if (attacker.lowHPBonus > 0 && attacker.hp / attacker.maxHp < 0.3) {
+                    baseDamage *= (1 + attacker.lowHPBonus / 100);
                 }
 
-                // Critical hit check
+                // Momentum bonus: consecutive hits deal more
+                baseDamage *= (1 + (this.momentum[id] || 0) * 0.02);
+
+                // Critical hit
                 let isCrit = false;
                 if (Math.random() * 100 < attacker.critChance) {
-                    baseDamage = baseDamage * (attacker.critDamage / 100);
+                    baseDamage *= (attacker.critDamage / 100);
                     isCrit = true;
                     attacker.critHits++;
                 }
 
-                // Apply defense (with armor penetration)
+                // Defense
                 const effectiveDefense = Math.max(0, other.defense - attacker.armorPen);
-                const damageReduction = effectiveDefense / (effectiveDefense + 50); // Diminishing returns
-                baseDamage *= (1 - damageReduction);
+                baseDamage *= (1 - effectiveDefense / (effectiveDefense + 50));
 
-                const damage = Math.round(Math.max(1, baseDamage));
+                const damage = Math.round(Math.max(2, baseDamage));
                 other.hp = Math.max(0, other.hp - damage);
-                other.invincible = this.gameTime + 500;
+                other.invincible = this.gameTime + 400;
                 attacker.score += damage;
                 attacker.hitsLanded++;
                 other.hitsTaken++;
 
+                // ── Momentum shift ──
+                this.momentum[id] = Math.min(8, (this.momentum[id] || 0) + 1);
+                this.momentum[otherId] = Math.max(0, (this.momentum[otherId] || 0) - 0.5);
+
                 // ── Combo tracking ──
-                const comboWindow = attacker.comboWindowMs;
-                if (this.gameTime - attacker.lastHitTime < comboWindow) {
+                if (this.gameTime - attacker.lastHitTime < attacker.comboWindowMs) {
                     attacker.combo++;
                     if (attacker.combo > attacker.maxCombo) attacker.maxCombo = attacker.combo;
                 } else {
@@ -499,17 +499,16 @@ export class GameEngine {
                 }
                 attacker.lastHitTime = this.gameTime;
 
-                // Build special meter
-                attacker.specialMeter = Math.min(100, attacker.specialMeter + 8 + (isCrit ? 15 : 0) + (attacker.combo >= 3 ? 10 : 0));
+                // Build special meter (faster)
+                attacker.specialMeter = Math.min(100, attacker.specialMeter + 15 + (isCrit ? 20 : 0) + (attacker.combo >= 3 ? 12 : 0));
                 if (attacker.specialMeter >= 100 && !attacker.specialReady) {
                     attacker.specialReady = true;
                     this.comboEffects.push({
                         x: attacker.body.position.x,
-                        y: attacker.body.position.y - 60,
+                        y: attacker.body.position.y - 65,
                         text: '⚡ SPECIAL READY!',
                         time: this.gameTime,
-                        color: '#FFE93E',
-                        size: 18,
+                        color: '#FFE93E', size: 20,
                     });
                 }
 
@@ -517,61 +516,44 @@ export class GameEngine {
                 if (attacker.lifesteal > 0) {
                     const healAmount = Math.round(damage * attacker.lifesteal / 100);
                     attacker.hp = Math.min(attacker.maxHp, attacker.hp + healAmount);
-
-                    // Green heal particles
-                    for (let i = 0; i < 3; i++) {
-                        this.particles.push({
-                            x: attacker.body.position.x + (Math.random() - 0.5) * 20,
-                            y: attacker.body.position.y,
-                            vx: (Math.random() - 0.5) * 2,
-                            vy: -1 - Math.random() * 2,
-                            life: 1,
-                            color: '#39FF14',
-                            size: 2 + Math.random() * 3,
-                            type: 'heal',
-                        });
-                    }
+                    this.particles.push({
+                        x: attacker.body.position.x, y: attacker.body.position.y - 10,
+                        vx: 0, vy: -2,
+                        life: 0.8, color: '#39FF14', size: 3, type: 'heal',
+                    });
                 }
 
-                // ── Thorn damage ──
+                // Thorn damage
                 if (other.thornDamage > 0) {
                     attacker.hp = Math.max(0, attacker.hp - other.thornDamage);
                 }
 
-                // ── Burn effect ──
+                // Burn effect
                 if (attacker.burnDamage > 0) {
-                    other.burnUntil = this.gameTime + 3000;
-                    // Fire particles on target
-                    for (let i = 0; i < 4; i++) {
+                    other.burnUntil = this.gameTime + 2500;
+                    for (let i = 0; i < 3; i++) {
                         this.particles.push({
-                            x: otherPos.x + (Math.random() - 0.5) * 20,
-                            y: otherPos.y + (Math.random() - 0.5) * 20,
-                            vx: (Math.random() - 0.5) * 3,
-                            vy: -1 - Math.random() * 3,
-                            life: 1,
-                            color: '#FF6B35',
-                            size: 2 + Math.random() * 4,
-                            type: 'fire',
+                            x: otherPos.x + (Math.random() - 0.5) * 15,
+                            y: otherPos.y + (Math.random() - 0.5) * 15,
+                            vx: (Math.random() - 0.5) * 2,
+                            vy: -1.5 - Math.random() * 2,
+                            life: 0.8, color: '#FF6B35',
+                            size: 2 + Math.random() * 3, type: 'fire',
                         });
                     }
                 }
 
-                // ── Slow effect ──
+                // Slow effect
                 if (attacker.slowEffect > 0) {
-                    other.slowUntil = this.gameTime + 2000;
+                    other.slowUntil = this.gameTime + 1500;
                 }
 
                 // ── Hit visual effects ──
-
-                // Hit effect
                 this.hitEffects.push({
-                    x: otherPos.x,
-                    y: otherPos.y,
-                    damage,
-                    time: this.gameTime,
+                    x: otherPos.x, y: otherPos.y,
+                    damage, time: this.gameTime,
                     color: attacker.color,
-                    isCrit,
-                    isCombo: attacker.combo >= 3,
+                    isCrit, isCombo: attacker.combo >= 3,
                 });
 
                 // Combo text
@@ -579,8 +561,7 @@ export class GameEngine {
                     const comboTexts = ['', '', 'DOUBLE!', 'TRIPLE!', 'ULTRA!', 'MEGA!', 'INSANE!', 'GODLIKE!'];
                     const comboText = comboTexts[Math.min(attacker.combo, comboTexts.length - 1)];
                     this.comboEffects.push({
-                        x: otherPos.x,
-                        y: otherPos.y - 70,
+                        x: otherPos.x, y: otherPos.y - 70,
                         text: `${attacker.combo}x ${comboText}`,
                         time: this.gameTime,
                         color: attacker.combo >= 5 ? '#FFE93E' : attacker.combo >= 3 ? '#FF6B35' : '#00F5FF',
@@ -591,38 +572,35 @@ export class GameEngine {
                 // Critical hit text
                 if (isCrit) {
                     this.comboEffects.push({
-                        x: otherPos.x + (Math.random() - 0.5) * 30,
+                        x: otherPos.x + (Math.random() - 0.5) * 20,
                         y: otherPos.y - 55,
-                        text: '💥 CRITICAL!',
-                        time: this.gameTime,
-                        color: '#FF2D78',
-                        size: 20,
+                        text: '💥 CRITICAL!', time: this.gameTime,
+                        color: '#FF2D78', size: 22,
                     });
-                    this.shakeIntensity = Math.max(this.shakeIntensity, 8);
+                    this.shakeIntensity = Math.max(this.shakeIntensity, 10);
                 }
 
-                // Spawn particles — more for bigger hits
-                const particleCount = isCrit ? 14 : (attacker.combo >= 3 ? 10 : 6);
+                // Impact particles — proportional to damage
+                const particleCount = Math.min(isCrit ? 12 : (attacker.combo >= 3 ? 8 : 5), 12);
                 for (let i = 0; i < particleCount; i++) {
-                    const pAngle = (Math.PI * 2 / particleCount) * i + Math.random() * 0.5;
+                    const pAngle = (Math.PI * 2 / particleCount) * i + Math.random() * 0.4;
                     this.particles.push({
-                        x: otherPos.x,
-                        y: otherPos.y,
-                        vx: Math.cos(pAngle) * (3 + Math.random() * (isCrit ? 8 : 4)),
-                        vy: Math.sin(pAngle) * (3 + Math.random() * (isCrit ? 8 : 4)),
-                        life: 1,
+                        x: otherPos.x, y: otherPos.y,
+                        vx: Math.cos(pAngle) * (3 + Math.random() * (isCrit ? 7 : 4)),
+                        vy: Math.sin(pAngle) * (3 + Math.random() * (isCrit ? 7 : 4)),
+                        life: 0.9,
                         color: isCrit ? '#FFE93E' : attacker.color,
-                        size: isCrit ? (3 + Math.random() * 5) : (2 + Math.random() * 4),
+                        size: isCrit ? (2 + Math.random() * 4) : (1.5 + Math.random() * 3),
                         type: 'impact',
                     });
                 }
 
-                // Screen shake proportional to damage
-                this.shakeIntensity = Math.max(this.shakeIntensity, Math.min(damage * 0.3, 15));
+                // Screen shake
+                this.shakeIntensity = Math.max(this.shakeIntensity, Math.min(damage * 0.35, 18));
 
                 // Knockback
                 const knockAngle = Math.atan2(otherPos.y - weaponPos.y, otherPos.x - weaponPos.x);
-                const knockForce = isCrit ? 0.005 : 0.003;
+                const knockForce = isCrit ? 0.006 : 0.003;
                 Body.applyForce(other.body, otherPos, {
                     x: Math.cos(knockAngle) * knockForce,
                     y: Math.sin(knockAngle) * knockForce,
@@ -636,11 +614,11 @@ export class GameEngine {
     }
 
     update(delta = 16.67) {
-        if (!this.isRunning || this.isFinished) return;
+        if (!this.isRunning || this.isFinished || this.isPaused) return;
 
         this.gameTime += delta;
 
-        // Round timer countdown
+        // Round pause
         if (this.roundPauseUntil > this.gameTime) return;
 
         this.roundTimer -= delta / 1000;
@@ -652,58 +630,56 @@ export class GameEngine {
 
         Engine.update(this.engine, delta);
 
-        // AI control
+        // AI
         Object.keys(this.agents).forEach(id => this._aiTick(id));
 
-        // Check weapon hits
+        // Collisions
         this._checkCollisions();
 
-        // Check KO
+        // KO check
         this._checkKO();
 
-        // Burn damage over time
+        // Burn DOT
         Object.keys(this.agents).forEach(id => {
             const a = this.agents[id];
-            if (a.burnUntil > this.gameTime) {
-                if (Math.random() < 0.05) {
-                    const burnDmg = 2;
-                    a.hp = Math.max(0, a.hp - burnDmg);
-                    // Fire particles
-                    this.particles.push({
-                        x: a.body.position.x + (Math.random() - 0.5) * 20,
-                        y: a.body.position.y - 10,
-                        vx: (Math.random() - 0.5) * 2,
-                        vy: -2 - Math.random() * 2,
-                        life: 0.8,
-                        color: '#FF6B35',
-                        size: 2 + Math.random() * 3,
-                        type: 'fire',
-                    });
-                }
+            if (a.burnUntil > this.gameTime && Math.random() < 0.06) {
+                a.hp = Math.max(0, a.hp - 2);
+                this.particles.push({
+                    x: a.body.position.x + (Math.random() - 0.5) * 15,
+                    y: a.body.position.y - 10,
+                    vx: (Math.random() - 0.5) * 1.5,
+                    vy: -2 - Math.random() * 1.5,
+                    life: 0.6, color: '#FF6B35',
+                    size: 2 + Math.random() * 2, type: 'fire',
+                });
             }
         });
 
-        // Update particles
+        // ── Particle management (cap for performance) ──
         this.particles = this.particles.filter(p => {
             p.x += p.vx;
             p.y += p.vy;
-            p.vx *= 0.96;
-            p.vy *= 0.96;
-            p.life -= 0.025;
+            p.vx *= 0.95;
+            p.vy *= 0.95;
+            p.life -= 0.03;
             return p.life > 0;
         });
-
-        // Clean old effects
-        this.hitEffects = this.hitEffects.filter(h => this.gameTime - h.time < 1200);
-        this.comboEffects = this.comboEffects.filter(c => this.gameTime - c.time < 1500);
-
-        // Decay screen shake
-        this.shakeIntensity *= 0.85;
-        if (this.shakeIntensity < 0.5) this.shakeIntensity = 0;
-
-        if (this.onUpdate) {
-            this.onUpdate(this.getState());
+        // Hard cap
+        if (this.particles.length > 60) {
+            this.particles = this.particles.slice(-60);
         }
+
+        // Clean effects
+        this.hitEffects = this.hitEffects.filter(h => this.gameTime - h.time < 1000);
+        this.comboEffects = this.comboEffects.filter(c => this.gameTime - c.time < 1200);
+
+        // Decay shake
+        this.shakeIntensity *= 0.82;
+        if (this.shakeIntensity < 0.3) this.shakeIntensity = 0;
+
+        // Decay momentum
+        this.momentum['1'] = Math.max(0, (this.momentum['1'] || 0) - 0.003);
+        this.momentum['2'] = Math.max(0, (this.momentum['2'] || 0) - 0.003);
     }
 
     _checkKO() {
@@ -711,22 +687,22 @@ export class GameEngine {
         for (const id of ids) {
             if (this.agents[id].hp <= 0) {
                 const winnerId = ids.find(k => k !== id);
-                // KO explosion
                 const pos = this.agents[id].body.position;
-                for (let i = 0; i < 30; i++) {
-                    const angle = (Math.PI * 2 / 30) * i;
+
+                // KO explosion
+                for (let i = 0; i < 24; i++) {
+                    const angle = (Math.PI * 2 / 24) * i;
                     this.particles.push({
-                        x: pos.x,
-                        y: pos.y,
-                        vx: Math.cos(angle) * (4 + Math.random() * 8),
-                        vy: Math.sin(angle) * (4 + Math.random() * 8),
-                        life: 1,
+                        x: pos.x, y: pos.y,
+                        vx: Math.cos(angle) * (5 + Math.random() * 8),
+                        vy: Math.sin(angle) * (5 + Math.random() * 8),
+                        life: 1.2,
                         color: this.agents[id].color,
-                        size: 3 + Math.random() * 6,
+                        size: 3 + Math.random() * 5,
                         type: 'ko',
                     });
                 }
-                this.shakeIntensity = 20;
+                this.shakeIntensity = 25;
                 this._finishMatch(winnerId, 'ko');
                 return;
             }
@@ -739,27 +715,28 @@ export class GameEngine {
             const [id1, id2] = ids;
             const hp1 = this.agents[id1].hp;
             const hp2 = this.agents[id2].hp;
-
-            if (hp1 === hp2) {
-                const winnerId = this.agents[id1].score >= this.agents[id2].score ? id1 : id2;
-                this._finishMatch(winnerId, 'decision');
-            } else {
-                const winnerId = hp1 > hp2 ? id1 : id2;
-                this._finishMatch(winnerId, 'decision');
-            }
+            const winnerId = hp1 !== hp2
+                ? (hp1 > hp2 ? id1 : id2)
+                : (this.agents[id1].score >= this.agents[id2].score ? id1 : id2);
+            this._finishMatch(winnerId, 'decision');
             return;
         }
 
-        // Next round — keep pause short to fit in backend's 45s window
+        // Next round
         this.currentRound++;
         this.roundTimer = this.roundTime;
         this.roundPauseUntil = this.gameTime + 2000;
+        this.roundJustStarted = this.gameTime + 2000; // mark for overlay
 
-        // Partial HP restore
+        // Partial HP restore + reset combos
         Object.values(this.agents).forEach(a => {
-            a.hp = Math.min(a.maxHp, a.hp + 40);
+            a.hp = Math.min(a.maxHp, a.hp + 30);
             a.combo = 0;
+            a.specialMeter = Math.min(100, a.specialMeter + 15); // Free special charge
         });
+
+        // Reset momentum
+        this.momentum = { '1': 0, '2': 0 };
 
         if (this.onRoundEnd) {
             this.onRoundEnd({
@@ -774,6 +751,7 @@ export class GameEngine {
         this.isFinished = true;
         this.winner = winnerId;
         this.finishReason = reason;
+        this.finishTime = this.gameTime;
         this.stop();
 
         if (this.onGameEnd) {
@@ -852,11 +830,17 @@ export class GameEngine {
             isFinished: this.isFinished,
             winner: this.winner,
             finishReason: this.finishReason,
+            finishTime: this.finishTime,
+            roundPauseUntil: this.roundPauseUntil,
+            roundJustStarted: this.roundJustStarted,
+            momentum: this.momentum,
         };
     }
 
     start() { this.isRunning = true; }
     stop() { this.isRunning = false; }
+    pause() { this.isPaused = true; }
+    resume() { this.isPaused = false; }
 
     destroy() {
         this.stop();
