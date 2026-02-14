@@ -28,6 +28,15 @@ Monad-native AI arena game:
 - Status: `GET /api/v1/arena/tournament/status`
 - Start bracket: `POST /api/v1/arena/tournament/start`
 
+6. Shop (agent inventory + Telegram MON payment):
+- Config: `GET /api/v1/shop/config`
+- My agents: `GET /api/v1/shop/my-agents?wallet_address=0x...`
+- Inventory: `GET /api/v1/shop/inventory/:agentId?wallet_address=0x...`
+- Create order: `POST /api/v1/shop/orders`
+- Check order: `GET /api/v1/shop/orders/:orderId?wallet_address=0x...`
+- Confirm payment: `POST /api/v1/shop/orders/:orderId/confirm`
+- Telegram payment command: `PAY <order_token> <tx_hash>`
+
 ## Payout Model
 
 For each completed match pool:
@@ -76,6 +85,12 @@ See `.env.example` for:
 Telegram env vars used:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
+- `TELEGRAM_BOT_USERNAME` (optional, used for shop UX)
+
+Shop payment env vars:
+- `SHOP_TREASURY_ADDRESS` (required for accepting MON payments)
+- `SHOP_ORDER_TTL_MINUTES` (default `30`)
+- `MONAD_EXPLORER_TX_BASE` (default `https://testnet.monadexplorer.com/tx/`)
 
 Security env vars:
 - `ALLOWED_ORIGINS` (comma-separated CORS allowlist for production)

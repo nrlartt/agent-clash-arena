@@ -945,3 +945,89 @@
         opacity: 1;
     }
 }
+
+.shop-payment-banner {
+    margin-bottom: var(--space-lg);
+    padding: var(--space-md);
+    border: 1px solid rgba(57, 255, 20, 0.2);
+    background: rgba(57, 255, 20, 0.04);
+}
+
+.shop-payment-banner__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+}
+
+.shop-payment-banner__title {
+    font-family: var(--font-display);
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.shop-payment-banner__pill {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--neon-yellow);
+    border: 1px solid rgba(255, 233, 62, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+}
+
+.shop-payment-banner__body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.shop-payment-banner__body code {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-primary);
+}
+
+.shop-payment-box {
+    width: 100%;
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    padding: var(--space-sm);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.shop-payment-box__row {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+.shop-payment-box__row code {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+    text-align: right;
+}
+
+.shop-payment-box__confirm {
+    display: flex;
+    gap: var(--space-sm);
+}
+
+.shop-payment-box__confirm .input-field {
+    flex: 1;
+}
+
+@media (max-width: 768px) {
+    .shop-payment-box__confirm {
+        flex-direction: column;
+    }
+}

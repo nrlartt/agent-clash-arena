@@ -4,6 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { SHOP_ITEMS_BY_ID, EQUIPPABLE_SLOTS } = require('./data/shop-items');
 
 const DB_PATH = path.join(__dirname, 'data', 'db.json');
 
@@ -13,6 +14,8 @@ const DEFAULT_DB = {
     bets: [],
     matchHistory: [],
     activityFeed: [],
+    shopOrders: [],
+    agentInventories: {},
     platform: {
         treasuryMON: 0,
         totalPaidToAgents: 0,
@@ -34,6 +37,10 @@ class JsonDatabase {
                 return {
                     ...JSON.parse(JSON.stringify(DEFAULT_DB)),
                     ...parsed,
+                    shopOrders: Array.isArray(parsed.shopOrders) ? parsed.shopOrders : [],
+                    agentInventories: parsed.agentInventories && typeof parsed.agentInventories === 'object'
+                        ? parsed.agentInventories
+                        : {},
                     platform: {
                         ...DEFAULT_DB.platform,
                         ...(parsed.platform || {}),
@@ -54,6 +61,22 @@ class JsonDatabase {
         } catch (err) {
             console.error('[DB-JSON] Failed to save:', err.message);
         }
+    }
+
+    _createEmptyInventory(agentId) {
+        return {
+            agentId,
+            equipped: {
+                weapon: null,
+                armor: null,
+                boots: null,
+                amulet: null,
+                rune: null,
+            },
+            backpack: [],
+            purchaseHistory: [],
+            updatedAt: Date.now(),
+        };
     }
 
     // ── Agents ──────────────────────────────────────────────
@@ -159,6 +182,142 @@ class JsonDatabase {
     }
 
     // ── Platform Treasury ───────────────────────────────────────
+    // ── Shop Orders ───────────────────────────────────────────
+    addShopOrder(order) {
+        this.data.shopOrders.unshift(order);
+        if (this.data.shopOrders.length > 5000) this.data.shopOrders.pop();
+        this._save();
+        return order;
+    }
+
+    getShopOrderById(id) {
+        return this.data.shopOrders.find(order => order.id === id) || null;
+    }
+
+    getShopOrderByToken(orderToken) {
+        return this.data.shopOrders.find(order => order.orderToken === orderToken) || null;
+    }
+
+    updateShopOrder(id, updates) {
+        const idx = this.data.shopOrders.findIndex(order => order.id === id);
+        if (idx === -1) return null;
+
+        this.data.shopOrders[idx] = {
+            ...this.data.shopOrders[idx],
+            ...updates,
+            payment: {
+                ...(this.data.shopOrders[idx].payment || {}),
+                ...(updates.payment || {}),
+            },
+            updatedAt: Date.now(),
+        };
+        this._save();
+        return this.data.shopOrders[idx];
+    }
+
+    findShopOrderByTxHash(txHash) {
+        const normalized = String(txHash || '').toLowerCase();
+        return this.data.shopOrders.find(
+            order => String(order.payment && order.payment.txHash || '').toLowerCase() === normalized
+        ) || null;
+    }
+
+    listShopOrdersByAgent(agentId, limit = 50) {
+        return this.data.shopOrders
+            .filter(order => order.agentId === agentId)
+            .slice(0, limit);
+    }
+
+    // ── Shop Inventories ──────────────────────────────────────
+    getAgentInventory(agentId) {
+        if (!agentId) return null;
+        if (!this.data.agentInventories[agentId]) {
+            this.data.agentInventories[agentId] = this._createEmptyInventory(agentId);
+            this._save();
+        }
+        return this.data.agentInventories[agentId];
+    }
+
+    applyShopPurchase(agentId, itemId, options = {}) {
+        const item = SHOP_ITEMS_BY_ID[itemId];
+        if (!item) return null;
+
+        const inventory = this.getAgentInventory(agentId);
+        if (!inventory) return null;
+
+        const itemEntry = {
+            itemId: item.id,
+            category: item.category,
+            purchasedAt: options.paidAt || Date.now(),
+            orderId: options.orderId || null,
+            txHash: options.txHash || null,
+            amountMON: options.amountMON || item.price,
+        };
+
+        if (options.buyAndEquip && EQUIPPABLE_SLOTS.has(item.category)) {
+            const existing = inventory.equipped[item.category];
+            if (existing) {
+                inventory.backpack.push(existing);
+            }
+            inventory.equipped[item.category] = itemEntry;
+        } else {
+            inventory.backpack.push(itemEntry);
+        }
+
+        inventory.purchaseHistory.unshift({
+            itemId: item.id,
+            orderId: options.orderId || null,
+            txHash: options.txHash || null,
+            buyAndEquip: !!options.buyAndEquip,
+            amountMON: options.amountMON || item.price,
+            paidAt: options.paidAt || Date.now(),
+        });
+        if (inventory.purchaseHistory.length > 200) inventory.purchaseHistory.pop();
+
+        inventory.updatedAt = Date.now();
+        this.data.agentInventories[agentId] = inventory;
+        this._save();
+        return inventory;
+    }
+
+    equipInventoryItem(agentId, itemId) {
+        const inventory = this.getAgentInventory(agentId);
+        if (!inventory) return null;
+
+        const idx = inventory.backpack.findIndex(entry => entry.itemId === itemId);
+        if (idx === -1) return null;
+
+        const entry = inventory.backpack[idx];
+        if (!EQUIPPABLE_SLOTS.has(entry.category)) return null;
+
+        inventory.backpack.splice(idx, 1);
+        const oldEquipped = inventory.equipped[entry.category];
+        if (oldEquipped) inventory.backpack.push(oldEquipped);
+        inventory.equipped[entry.category] = entry;
+        inventory.updatedAt = Date.now();
+
+        this.data.agentInventories[agentId] = inventory;
+        this._save();
+        return inventory;
+    }
+
+    unequipInventorySlot(agentId, slot) {
+        const inventory = this.getAgentInventory(agentId);
+        if (!inventory) return null;
+        if (!EQUIPPABLE_SLOTS.has(slot)) return inventory;
+
+        const equippedEntry = inventory.equipped[slot];
+        if (!equippedEntry) return inventory;
+
+        inventory.backpack.push(equippedEntry);
+        inventory.equipped[slot] = null;
+        inventory.updatedAt = Date.now();
+
+        this.data.agentInventories[agentId] = inventory;
+        this._save();
+        return inventory;
+    }
+
     updatePlatformEconomy(updates = {}) {
         this.data.platform = {
             ...DEFAULT_DB.platform,

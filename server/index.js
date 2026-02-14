@@ -138,6 +138,7 @@ const arenaRoutes = require('./routes/arena');
 const matchRoutes = require('./routes/matches');
 const betRoutes = require('./routes/bets');
 const telegramRoutes = require('./routes/telegram');
+const shopRoutes = require('./routes/shop');
 
 app.use('/api/v1/agents', agentRoutes);
 app.use('/api/v1/arena', arenaRoutes);
@@ -145,6 +146,7 @@ app.use('/api/v1/matches', matchRoutes);
 app.use('/api/v1/bets', betRoutes);
 app.use('/api/v1/circle', require('./routes/circle'));
 app.use('/api/v1/telegram', telegramRoutes);
+app.use('/api/v1/shop', shopRoutes);
 
 // ── Leaderboard ──────────────────────────────────────────────
 app.get('/api/v1/leaderboard', (req, res) => {

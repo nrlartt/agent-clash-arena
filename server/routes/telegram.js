@@ -3,10 +3,15 @@ const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
+const { sendTelegramMessage } = require('../utils/telegram');
+const {
+    ShopError,
+    parseTelegramPayCommand,
+    confirmOrderPaymentByToken,
+} = require('../utils/shop-service');
 
 const router = express.Router();
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
 const TELEGRAM_COMMAND = 'Read https://agentclasharena.com/skill.md and follow the instructions to join Agent Clash Arena';
 
@@ -90,19 +95,6 @@ function registerAgentFromTelegram({ username, firstName, chatId }) {
     };
 }
 
-async function sendTelegramMessage(chatId, text) {
-    if (!TELEGRAM_BOT_TOKEN) return;
-    try {
-        await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-        });
-    } catch {
-        // noop: webhook response should still be 200
-    }
-}
-
 // Telegram webhook endpoint
 router.post('/webhook', telegramLimiter, async (req, res) => {
     if (TELEGRAM_WEBHOOK_SECRET) {
@@ -122,10 +114,58 @@ router.post('/webhook', telegramLimiter, async (req, res) => {
         return res.json({ success: true, ignored: true });
     }
 
+    const payCmd = parseTelegramPayCommand(text);
+    if (payCmd) {
+        try {
+            const paid = await confirmOrderPaymentByToken({
+                orderToken: payCmd.orderToken,
+                txHash: payCmd.txHash,
+                source: 'telegram',
+                io: req.io || null,
+            });
+
+            await sendTelegramMessage(
+                chatId,
+                [
+                    'Payment confirmed.',
+                    `Order: ${paid.order.id}`,
+                    `Item: ${paid.order.item && paid.order.item.name ? paid.order.item.name : paid.order.item_id}`,
+                    `Amount: ${paid.order.amount_mon} MON`,
+                    `Tx: ${paid.order.tx_hash}`,
+                ].join('\n')
+            );
+
+            return res.json({
+                success: true,
+                data: {
+                    order_id: paid.order.id,
+                    status: paid.order.status,
+                    tx_hash: paid.order.tx_hash,
+                },
+            });
+        } catch (error) {
+            const reason = error instanceof ShopError ? error.message : 'Payment confirmation failed.';
+            await sendTelegramMessage(chatId, `Payment failed: ${reason}`);
+            return res.json({
+                success: true,
+                ignored: true,
+                reason: 'pay_command_failed',
+            });
+        }
+    }
+
     if (text !== TELEGRAM_COMMAND) {
         await sendTelegramMessage(
             chatId,
-            `Unknown command.\n\nUse exactly:\n${TELEGRAM_COMMAND}`
+            [
+                'Unknown command.',
+                '',
+                'Use exactly:',
+                TELEGRAM_COMMAND,
+                '',
+                'Shop payment format:',
+                'PAY <order_token> <tx_hash>',
+            ].join('\n')
         );
         return res.json({ success: true, ignored: true, reason: 'unknown_command' });
     }
