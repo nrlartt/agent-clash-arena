@@ -277,6 +277,7 @@ app.get('/api/v1/arena/current', (_req, res) => {
             phase: state.phase,
             match: state.match,
             timeLeft: state.bettingTimeLeft,
+            waitingReason: state.waitingReason || null,
         },
     });
 });
@@ -455,6 +456,7 @@ async function buildLiveStats() {
         minPoolMON: live.minPoolMON,
         poolRemainingMON: live.poolRemainingMON,
         poolReady: live.poolReady,
+        waitingReason: live.waitingReason || null,
         phase: live.phase,
         bettingTimeLeft: live.bettingTimeLeft,
         currentMatchId: live.currentMatchId,
@@ -468,13 +470,12 @@ io.on('connection', (socket) => {
 
     // Send current matchmaker state immediately
     const state = matchmaker.getState();
-    if (state.match) {
-        socket.emit('match:phase', {
-            phase: state.phase,
-            match: state.match,
-            timeLeft: state.bettingTimeLeft,
-        });
-    }
+    socket.emit('match:phase', {
+        phase: state.phase,
+        match: state.match || null,
+        timeLeft: state.bettingTimeLeft,
+        reason: state.waitingReason || null,
+    });
     // Send recent match history
     if (state.matchHistory.length > 0) {
         socket.emit('match:history', state.matchHistory);

@@ -27,7 +27,8 @@ function withTimeout(promise, ms, label) {
     ]);
 }
 
-const TX_TIMEOUT = 15000;  // 15 seconds max for any blockchain operation
+const TX_SEND_TIMEOUT = Number.parseInt(process.env.CHAIN_TX_SEND_TIMEOUT_MS || '30000', 10);
+const TX_WAIT_TIMEOUT = Number.parseInt(process.env.CHAIN_TX_WAIT_TIMEOUT_MS || '180000', 10);
 
 class BlockchainService {
     constructor() {
@@ -86,9 +87,9 @@ class BlockchainService {
             const matchBytes = this._toBytes32(matchId);
             const tx = await withTimeout(
                 this.contract.createMatch(matchBytes, agent1Name, agent2Name, { gasLimit: 300000 }),
-                TX_TIMEOUT, 'createMatch.send'
+                TX_SEND_TIMEOUT, 'createMatch.send'
             );
-            const receipt = await withTimeout(tx.wait(), TX_TIMEOUT, 'createMatch.wait');
+            const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'createMatch.wait');
             logger.info('[Blockchain] Match created on-chain', {
                 matchId,
                 txHash: receipt.hash,
@@ -112,8 +113,8 @@ class BlockchainService {
 
         try {
             const matchBytes = this._toBytes32(matchId);
-            const tx = await withTimeout(this.contract.lockMatch(matchBytes, { gasLimit: 100000 }), TX_TIMEOUT, 'lockMatch.send');
-            const receipt = await withTimeout(tx.wait(), TX_TIMEOUT, 'lockMatch.wait');
+            const tx = await withTimeout(this.contract.lockMatch(matchBytes, { gasLimit: 100000 }), TX_SEND_TIMEOUT, 'lockMatch.send');
+            const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'lockMatch.wait');
             logger.info('[Blockchain] Match locked on-chain', { matchId, txHash: receipt.hash });
             return receipt.hash;
         } catch (err) {
@@ -137,9 +138,9 @@ class BlockchainService {
 
             const tx = await withTimeout(
                 this.contract.resolveMatch(matchBytes, winningSide, { gasLimit: 200000 }),
-                TX_TIMEOUT, 'resolveMatch.send'
+                TX_SEND_TIMEOUT, 'resolveMatch.send'
             );
-            const receipt = await withTimeout(tx.wait(), TX_TIMEOUT, 'resolveMatch.wait');
+            const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'resolveMatch.wait');
             logger.info('[Blockchain] Match resolved on-chain', {
                 matchId,
                 winnerId,

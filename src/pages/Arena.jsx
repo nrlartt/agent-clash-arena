@@ -23,6 +23,11 @@ import './Arena.css';
 // ── API Config ──
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
 const SOCKET_URL = API_URL.replace('/api/v1', '') || window.location.origin;
+const WAITING_REASON_LABELS = {
+    NO_REAL_AGENTS: 'Yeterli gerçek ajan yok. Yeni kayıtlar bekleniyor.',
+    CHAIN_NOT_CONFIGURED: 'On-chain servis yapılandırılmamış. Contract ayarları bekleniyor.',
+    CHAIN_CREATE_FAILED: 'Maç contract üzerinde açılamadı. Kısa süre içinde tekrar denenecek.',
+};
 
 export default function Arena() {
     // ── Game Loop State (driven by backend matchmaker) ──
@@ -50,6 +55,7 @@ export default function Arena() {
     const [activityFeed, setActivityFeed] = useState([]);
     const [recentResults, setRecentResults] = useState([]);
     const [wsConnected, setWsConnected] = useState(false);
+    const [waitingReason, setWaitingReason] = useState(null);
 
     const { account } = useWallet();
     const { inventories } = useInventory();
@@ -101,9 +107,10 @@ export default function Arena() {
                 if (resultsJson?.success && Array.isArray(resultsJson.data)) {
                     setRecentResults(resultsJson.data);
                 }
-                if (currentJson?.success && currentJson.data?.match) {
-                    const { phase, match, timeLeft: tl } = currentJson.data;
-                    setCurrentMatch(match);
+                if (currentJson?.success && currentJson.data) {
+                    const { phase, match, timeLeft: tl, waitingReason: reason } = currentJson.data;
+                    setCurrentMatch(match || null);
+                    setWaitingReason(reason || null);
                     if (phase === 'BETTING') {
                         setGameState('BETTING');
                         setTimeLeft(tl || 0);
@@ -114,6 +121,7 @@ export default function Arena() {
                         setGameState('FINISHED');
                     } else {
                         setGameState('WAITING');
+                        setTimeLeft(typeof tl === 'number' ? tl : 0);
                     }
                 }
             } catch {
@@ -124,13 +132,14 @@ export default function Arena() {
 
         // ── Match phase updates from backend matchmaker ──
         socket.on('match:phase', (data) => {
-            const { phase, match, timeLeft: tl, result } = data;
+            const { phase, match, timeLeft: tl, result, reason } = data;
 
-            if (match) {
-                setCurrentMatch(match);
+            if (Object.prototype.hasOwnProperty.call(data, 'match')) {
+                setCurrentMatch(match || null);
             }
 
             if (phase === 'BETTING') {
+                setWaitingReason(null);
                 setGameState('BETTING');
                 setTimeLeft(tl || 30);
                 setMatchResult(null);
@@ -139,9 +148,11 @@ export default function Arena() {
                 setLiveMatchState(null);
                 setMatchKey(k => k + 1);
             } else if (phase === 'FIGHTING') {
+                setWaitingReason(null);
                 setGameState('LIVE');
                 if (typeof tl === 'number') setTimeLeft(tl);
             } else if (phase === 'RESULT') {
+                setWaitingReason(null);
                 if (result) setMatchResult(result);
                 // Capture final combat stats before clearing
                 setFinalStats(prev => prev); // keep existing if already set
@@ -151,9 +162,10 @@ export default function Arena() {
                 });
                 setGameState('FINISHED');
                 setTimeLeft(10);
-            } else if (phase === 'COOLDOWN') {
+            } else if (phase === 'COOLDOWN' || phase === 'WAITING' || phase === 'IDLE') {
+                setWaitingReason(reason || null);
                 setGameState('WAITING');
-                setTimeLeft(typeof tl === 'number' ? tl : 5);
+                setTimeLeft(typeof tl === 'number' ? tl : 0);
             }
         });
 
@@ -168,8 +180,18 @@ export default function Arena() {
         });
 
         // Betting timer countdown
-        socket.on('match:timer', ({ timeLeft: tl }) => {
+        socket.on('match:timer', ({ timeLeft: tl, currentPool, minPool }) => {
             setTimeLeft(tl);
+            if (typeof currentPool === 'number' || typeof minPool === 'number') {
+                setCurrentMatch(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        totalBets: typeof currentPool === 'number' ? currentPool : prev.totalBets,
+                        poolMinMON: typeof minPool === 'number' ? minPool : prev.poolMinMON,
+                    };
+                });
+            }
         });
 
         // Fight events (hits, combos, etc.)
@@ -290,6 +312,11 @@ export default function Arena() {
         // Fallback: use the winner object from the result directly
         return matchResult.winner || null;
     }, [matchResult, currentMatch]);
+
+    const poolMinMON = Number(currentMatch?.poolMinMON || liveStats.minPoolMON || 0);
+    const poolCurrentMON = Number(currentMatch?.totalBets || liveStats.activeBetsPool || 0);
+    const poolRemainingMON = Math.max(0, poolMinMON - poolCurrentMON);
+    const poolProgressPct = poolMinMON > 0 ? Math.min(100, (poolCurrentMON / poolMinMON) * 100) : 0;
 
     // Equipment bonus now comes from backend match data (real equipment system)
     const getEquipmentBonus = (agent) => {
@@ -609,15 +636,34 @@ export default function Arena() {
                                         {gameState === 'BETTING' ? '🎰' : '⚔️'}
                                     </div>
                                     <h2 className="arena-placeholder__title text-display">
-                                        {gameState === 'BETTING' ? 'BETS ARE OPEN' : 'PREPARING MATCH'}
+                                        {gameState === 'BETTING' ? 'BETS ARE OPEN' : 'MATCH WAITING'}
                                     </h2>
-                                    <div className="arena-placeholder__timer">{timeLeft}</div>
+                                    <div className="arena-placeholder__timer">{Math.max(0, timeLeft)}</div>
                                     <p className="arena-placeholder__subtitle">
                                         {gameState === 'BETTING'
-                                            ? 'Place your bets before the timer runs out!'
-                                            : currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Next match starting soon...'
+                                            ? 'Pool threshold dolunca maç otomatik başlar.'
+                                            : WAITING_REASON_LABELS[waitingReason] || (currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Maç koşulları bekleniyor...')
                                         }
                                     </p>
+                                    {gameState === 'BETTING' && poolMinMON > 0 && (
+                                        <div className="arena-placeholder__pool-progress">
+                                            <div className="arena-placeholder__pool-header">
+                                                <span>Pool</span>
+                                                <span>{poolCurrentMON.toFixed(2)} / {poolMinMON.toFixed(2)} MON</span>
+                                            </div>
+                                            <div className="arena-placeholder__pool-bar">
+                                                <div
+                                                    className="arena-placeholder__pool-fill"
+                                                    style={{ width: `${poolProgressPct}%` }}
+                                                />
+                                            </div>
+                                            <div className="arena-placeholder__pool-meta">
+                                                {poolRemainingMON > 0
+                                                    ? `${poolRemainingMON.toFixed(2)} MON daha gerekli`
+                                                    : 'Pool hazır, maç başlıyor...'}
+                                            </div>
+                                        </div>
+                                    )}
                                     {gameState === 'WAITING' && currentMatch && (
                                         <div className="arena-placeholder__preview">
                                             <div className="arena-placeholder__fighter" style={{ color: currentMatch.agent1.color }}>

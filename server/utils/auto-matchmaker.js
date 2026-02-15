@@ -70,11 +70,12 @@ function parseAmount(value, fallback, min = 0) {
 // Match phases timing and pool gating
 const BETTING_DURATION = parseDurationMs(process.env.MATCH_BETTING_DURATION_MS, 120000); // 2m default
 const BETTING_EXTENSION_DURATION = parseDurationMs(process.env.MATCH_POOL_EXTENSION_MS, BETTING_DURATION);
-const MATCH_MIN_POOL_MON = parseAmount(process.env.MATCH_MIN_POOL_MON, 5000, 0);
+const MATCH_MIN_POOL_MON = parseAmount(process.env.MATCH_MIN_POOL_MON, 100, 0);
+const WAITING_RETRY_MS = parseDurationMs(process.env.MATCH_WAITING_RETRY_MS, 10000, 1000);
+const POOL_READY_START_DELAY_MS = parseDurationMs(process.env.MATCH_POOL_READY_DELAY_MS, 2000, 250);
 const FIGHT_DURATION = 195000;     // 195s fight (3 rounds × 60s + pauses + buffer)
 const RESULT_DURATION = 6000;      // 6s show result
 const COOLDOWN_DURATION = 3000;    // 3s between matches
-const ALLOW_SIMULATED_MATCH_FALLBACK = process.env.ALLOW_SIMULATED_MATCH_FALLBACK !== 'false';
 
 function toTimestamp(value) {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -91,6 +92,8 @@ class AutoMatchmaker {
         this.phaseTimer = null;
         this.bettingTimeLeft = 0;
         this.bettingInterval = null;
+        this.waitingReason = null;
+        this._fightStartPending = false;
         this.matchHistory = [];
         this._realAgentsCache = [];
         this._lastAgentFetch = 0;
@@ -134,8 +137,47 @@ class AutoMatchmaker {
             phase: this.phase,
             match: this.currentMatch,
             bettingTimeLeft: phaseTimeLeft,
+            waitingReason: this.waitingReason,
             matchHistory: this.matchHistory.slice(0, 10),
         };
+    }
+
+    _isRealOnlyMatch(match) {
+        if (!match?.agent1 || !match?.agent2) return false;
+        const a1Real = !match.agent1.isSimulated && !!match.agent1.isReal;
+        const a2Real = !match.agent2.isSimulated && !!match.agent2.isReal;
+        return a1Real && a2Real;
+    }
+
+    _enterWaitingState(reason, message, retryMs = WAITING_RETRY_MS) {
+        clearInterval(this.bettingInterval);
+        clearTimeout(this.phaseTimer);
+        this._fightStartPending = false;
+        this.phase = 'WAITING';
+        this.waitingReason = reason;
+        this.currentMatch = null;
+        this.bettingTimeLeft = Math.ceil(retryMs / 1000);
+
+        this.io.emit('match:phase', {
+            phase: 'WAITING',
+            match: null,
+            timeLeft: this.bettingTimeLeft,
+            reason,
+            message,
+        });
+
+        if (message) {
+            this.io.emit('arena:live_event', {
+                type: 'waiting',
+                icon: '⏳',
+                text: message,
+                color: '#FFE93E',
+                timestamp: Date.now(),
+            });
+        }
+
+        this.phaseTimer = setTimeout(() => this._safeNextMatch(), retryMs);
+        logger.info('[AutoMatchmaker] Waiting for real match conditions', { reason, retryMs, message });
     }
 
     async _restoreOrStartLiveMatch() {
@@ -164,8 +206,25 @@ class AutoMatchmaker {
             this._safeNextMatch();
             return;
         }
+        if (!this._isRealOnlyMatch(restoredMatch)) {
+            logger.info('[AutoMatchmaker] Ignoring non-real restored match and waiting for real agents', { matchId: restoredMatch.id });
+            if (typeof db.removeMatch === 'function') {
+                Promise.resolve(db.removeMatch(restoredMatch.id)).catch(() => {});
+            }
+            this._safeNextMatch();
+            return;
+        }
+        if (!restoredMatch.onChain || !restoredMatch.onChainTxHash) {
+            logger.info('[AutoMatchmaker] Ignoring restored match without on-chain registration', { matchId: restoredMatch.id });
+            if (typeof db.removeMatch === 'function') {
+                Promise.resolve(db.removeMatch(restoredMatch.id)).catch(() => {});
+            }
+            this._safeNextMatch();
+            return;
+        }
 
         this.currentMatch = restoredMatch;
+        this.waitingReason = null;
         const status = String(candidate.status || 'betting').toLowerCase();
         const now = Date.now();
         const savedPhaseEnd = toTimestamp(candidate.phaseEndsAt);
@@ -246,23 +305,57 @@ class AutoMatchmaker {
                 minPool: requiredPool,
             });
 
-            if (this.bettingTimeLeft <= 0) {
-                const currentPool = Number(this.currentMatch.totalBets || 0);
-                if (currentPool >= requiredPool) {
-                    clearInterval(this.bettingInterval);
-                    this.currentMatch.poolTargetMet = true;
-                    this._startFight();
-                    return;
-                }
+            if (this._fightStartPending) {
+                return;
+            }
 
+            const currentPool = Number(this.currentMatch.totalBets || 0);
+            if (currentPool >= requiredPool) {
+                this.currentMatch.poolTargetMet = true;
+                this._queueFightStart(currentPool, requiredPool);
+                return;
+            }
+
+            if (this.bettingTimeLeft <= 0) {
                 this._extendBettingWindow(currentPool, requiredPool);
             }
         }, 1000);
     }
 
+    _queueFightStart(currentPool, requiredPool) {
+        if (!this.currentMatch || this.phase !== 'BETTING' || this._fightStartPending) return;
+        this._fightStartPending = true;
+        clearTimeout(this.phaseTimer);
+
+        const now = Date.now();
+        this.currentMatch.poolTargetMet = true;
+        this.currentMatch.phaseStartedAt = now;
+        this.currentMatch.phaseEndsAt = now + POOL_READY_START_DELAY_MS;
+        this.bettingTimeLeft = Math.ceil(POOL_READY_START_DELAY_MS / 1000);
+        this._persistCurrentMatch();
+
+        this.io.emit('match:update', this.currentMatch);
+        this.io.emit('match:timer', {
+            timeLeft: this.bettingTimeLeft,
+            currentPool: Number(currentPool || this.currentMatch.totalBets || 0),
+            minPool: Number(requiredPool || this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON),
+        });
+
+        this.phaseTimer = setTimeout(() => {
+            this._fightStartPending = false;
+            if (!this.currentMatch || this.phase !== 'BETTING') return;
+            const minPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
+            const pool = Number(this.currentMatch.totalBets || 0);
+            if (pool < minPool) return;
+            this._startFight();
+        }, POOL_READY_START_DELAY_MS);
+    }
+
     _extendBettingWindow(currentPool, requiredPool) {
         if (!this.currentMatch || this.phase !== 'BETTING') return;
 
+        this._fightStartPending = false;
+        clearTimeout(this.phaseTimer);
         const now = Date.now();
         const extensionMs = Number(this.currentMatch.bettingExtensionMs || BETTING_EXTENSION_DURATION);
         this.currentMatch.status = 'betting';
@@ -359,6 +452,7 @@ class AutoMatchmaker {
             minPoolMON: requiredPool,
             poolRemainingMON: Math.max(0, requiredPool - activePool),
             poolReady: activePool >= requiredPool,
+            waitingReason: this.waitingReason,
             recentResults: this.matchHistory.slice(0, 10),
         };
     }
@@ -418,9 +512,42 @@ class AutoMatchmaker {
     // ── Match Lifecycle ─────────────────────────────────────
 
     async _nextMatch() {
-        const [agent1, agent2] = await this._pickFighters();
+        const fighters = await this._pickFighters();
+        if (!fighters) {
+            this._enterWaitingState(
+                'NO_REAL_AGENTS',
+                'Not enough active real agents. Waiting for registrations to start a real match.',
+                WAITING_RETRY_MS
+            );
+            return;
+        }
+
+        if (!blockchain.enabled) {
+            this._enterWaitingState(
+                'CHAIN_NOT_CONFIGURED',
+                'On-chain match service is not configured. Waiting for contract/operator setup.',
+                WAITING_RETRY_MS
+            );
+            return;
+        }
+
+        const [agent1, agent2] = fighters;
         const matchId = `match-${uuidv4().slice(0, 8)}`;
-        const hasRealAgent = !agent1.isSimulated || !agent2.isSimulated;
+        const hasRealAgent = true;
+
+        // Hard requirement: every match must exist on-chain before betting opens.
+        const onChainTxHash = await blockchain.createMatchOnChain(matchId, agent1.name, agent2.name);
+        if (!onChainTxHash) {
+            this._enterWaitingState(
+                'CHAIN_CREATE_FAILED',
+                'Could not create the next match on-chain. Retrying shortly.',
+                WAITING_RETRY_MS
+            );
+            return;
+        }
+
+        this.waitingReason = null;
+        this._fightStartPending = false;
 
         this.currentMatch = {
             id: matchId,
@@ -434,10 +561,10 @@ class AutoMatchmaker {
             agent2Odds: 2.0,
             bets: [],
             createdAt: Date.now(),
-            isSimulated: agent1.isSimulated && agent2.isSimulated,
+            isSimulated: false,
             hasRealAgent,
-            onChain: false,
-            onChainTxHash: null,
+            onChain: true,
+            onChainTxHash,
             poolMinMON: MATCH_MIN_POOL_MON,
             poolTargetMet: false,
             extensionCount: 0,
@@ -447,26 +574,7 @@ class AutoMatchmaker {
             phaseEndsAt: Date.now() + BETTING_DURATION,
         };
 
-        this._persistCurrentMatch();
-
-        // Try to create match on-chain (NON-BLOCKING)
-        blockchain.createMatchOnChain(matchId, agent1.name, agent2.name)
-            .then((txHash) => {
-                if (!this.currentMatch || this.currentMatch.id !== matchId) return;
-                if (!txHash) {
-                    logger.warn(`[AutoMatchmaker] Match ${matchId} could not be created on-chain; keeping off-chain mode`);
-                    return;
-                }
-
-                this.currentMatch.onChain = true;
-                this.currentMatch.onChainTxHash = txHash;
-                this.io.emit('match:update', this.currentMatch);
-                this._persistCurrentMatch();
-                logger.info(`[AutoMatchmaker] Match ${matchId} created on-chain`, { txHash });
-            })
-            .catch(err => {
-                logger.warn(`[AutoMatchmaker] On-chain match creation failed: ${err.message}`);
-            });
+        await this._persistCurrentMatch();
 
         // Start BETTING phase
         this.phase = 'BETTING';
@@ -477,20 +585,19 @@ class AutoMatchmaker {
         this.io.emit('arena:live_event', {
             type: 'match_start',
             icon: 'âš”ï¸',
-            text: `${agent1.name} vs ${agent2.name} pool opened. Min ${MATCH_MIN_POOL_MON} MON (${hasRealAgent ? 'REAL' : 'SIM'})`,
+            text: `${agent1.name} vs ${agent2.name} pool opened. Min ${MATCH_MIN_POOL_MON} MON (REAL)`,
             color: '#00F5FF',
             timestamp: Date.now(),
         });
 
         Promise.resolve(db.addActivity({
             type: 'match_start',
-            message: `${agent1.name} vs ${agent2.name} pool opened. Min ${MATCH_MIN_POOL_MON} MON (${hasRealAgent ? 'REAL' : 'SIM'})`,
+            message: `${agent1.name} vs ${agent2.name} pool opened. Min ${MATCH_MIN_POOL_MON} MON (REAL)`,
             time: Date.now(),
             icon: 'âš”ï¸',
         })).catch((err) => logger.warn('[AutoMatchmaker] Could not persist match_start activity', { error: err.message }));
 
-        const realLabel = hasRealAgent ? ' [REAL AGENTS]' : ' [SIM]';
-        logger.info(`[AutoMatchmaker] New match: ${agent1.name} vs ${agent2.name} (${matchId})${realLabel} | minPool=${MATCH_MIN_POOL_MON} MON | bettingWindow=${Math.ceil(BETTING_DURATION / 1000)}s`);
+        logger.info(`[AutoMatchmaker] New REAL match: ${agent1.name} vs ${agent2.name} (${matchId}) | minPool=${MATCH_MIN_POOL_MON} MON | bettingWindow=${Math.ceil(BETTING_DURATION / 1000)}s | tx=${onChainTxHash}`);
 
         // Countdown timer
         this._startBettingCountdown();
@@ -498,6 +605,8 @@ class AutoMatchmaker {
 
     _startFight({ restored = false } = {}) {
         if (!this.currentMatch) return;
+        clearInterval(this.bettingInterval);
+        this._fightStartPending = false;
         const requiredPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
         const currentPool = Number(this.currentMatch.totalBets || 0);
         if (!restored && currentPool < requiredPool) {
@@ -562,6 +671,8 @@ class AutoMatchmaker {
     _scheduleNextMatch() {
         clearTimeout(this.phaseTimer);
         clearInterval(this.bettingInterval);
+        this._fightStartPending = false;
+        this.waitingReason = null;
         this.phase = 'COOLDOWN';
         this.bettingTimeLeft = 0;
         try { this.io.emit('match:phase', { phase: 'COOLDOWN' }); } catch { /* ignore */ }
@@ -767,31 +878,16 @@ class AutoMatchmaker {
         const realAgents = await this._fetchRealAgents();
         const activeReal = realAgents.filter(a => a.status === 'active');
 
-        if (activeReal.length >= 2) {
-            // Pick 2 random real agents
-            const shuffled = [...activeReal].sort(() => Math.random() - 0.5);
-            const fighter1 = this._dbAgentToFighter(shuffled[0]);
-            const fighter2 = this._dbAgentToFighter(shuffled[1]);
-            logger.info(`[AutoMatchmaker] Picked REAL agents: ${fighter1.name} vs ${fighter2.name}`);
-            return [fighter1, fighter2];
+        if (activeReal.length < 2) {
+            return null;
         }
 
-        if (activeReal.length === 1) {
-            // 1 real agent vs 1 simulated
-            const fighter1 = this._dbAgentToFighter(activeReal[0]);
-            const simShuffled = [...SIM_AGENTS].sort(() => Math.random() - 0.5);
-            const fighter2 = simShuffled[0];
-            logger.info(`[AutoMatchmaker] Mixed match: ${fighter1.name} (REAL) vs ${fighter2.name} (SIM)`);
-            return [fighter1, fighter2];
-        }
-
-        // No real agents — use sim agents
-        if (!ALLOW_SIMULATED_MATCH_FALLBACK) {
-            throw new Error('Not enough active real agents for live matches and simulated fallback is disabled');
-        }
-
-        const shuffled = [...SIM_AGENTS].sort(() => Math.random() - 0.5);
-        return [shuffled[0], shuffled[1]];
+        // Pick 2 random real agents only.
+        const shuffled = [...activeReal].sort(() => Math.random() - 0.5);
+        const fighter1 = this._dbAgentToFighter(shuffled[0]);
+        const fighter2 = this._dbAgentToFighter(shuffled[1]);
+        logger.info(`[AutoMatchmaker] Picked REAL agents: ${fighter1.name} vs ${fighter2.name}`);
+        return [fighter1, fighter2];
     }
 
     _formatAgent(agent) {
@@ -923,10 +1019,10 @@ class AutoMatchmaker {
 
         if (!wasPoolReady && this.currentMatch.poolTargetMet) {
             const now = Date.now();
-            const poolText = `Minimum pool reached (${this.currentMatch.totalBets.toFixed(2)} / ${requiredPool.toFixed(2)} MON). Match can now start.`;
+            const poolText = `Minimum pool reached (${this.currentMatch.totalBets.toFixed(2)} / ${requiredPool.toFixed(2)} MON). Match starting now.`;
             this.io.emit('arena:live_event', {
                 type: 'pool_ready',
-                icon: '✅',
+                icon: 'POOL',
                 text: poolText,
                 color: '#2ECC71',
                 timestamp: now,
@@ -937,24 +1033,11 @@ class AutoMatchmaker {
                     type: 'pool_ready',
                     message: poolText,
                     time: now,
-                    icon: '✅',
+                    icon: 'POOL',
                 })).catch((err) => logger.warn('[AutoMatchmaker] Failed to persist pool_ready activity', { error: err.message }));
             }
-        }
 
-        if (!wasPoolReady && this.currentMatch.poolTargetMet && Number(this.currentMatch.extensionCount || 0) > 0 && this.phase === 'BETTING') {
-            clearInterval(this.bettingInterval);
-            this.bettingTimeLeft = 0;
-            this.io.emit('match:timer', {
-                timeLeft: 0,
-                currentPool: Number(this.currentMatch.totalBets || 0),
-                minPool: requiredPool,
-            });
-            setTimeout(() => {
-                if (!this.currentMatch || this.phase !== 'BETTING') return;
-                if (Number(this.currentMatch.totalBets || 0) < requiredPool) return;
-                this._startFight();
-            }, 500);
+            this._queueFightStart(this.currentMatch.totalBets, requiredPool);
         }
 
         if (typeof db.addBet === 'function') {
@@ -988,3 +1071,4 @@ class AutoMatchmaker {
 }
 
 module.exports = AutoMatchmaker;
+

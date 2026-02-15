@@ -951,6 +951,47 @@
     max-width: 300px;
 }
 
+.arena-placeholder__pool-progress {
+    width: min(420px, 90%);
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+}
+
+.arena-placeholder__pool-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.arena-placeholder__pool-bar {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+}
+
+.arena-placeholder__pool-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #00F5FF 0%, #FFE93E 100%);
+    box-shadow: 0 0 16px rgba(255, 233, 62, 0.25);
+    transition: width 0.35s ease;
+}
+
+.arena-placeholder__pool-meta {
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+}
+
 .arena-placeholder__preview {
     display: flex;
     align-items: center;
