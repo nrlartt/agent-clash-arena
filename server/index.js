@@ -42,7 +42,14 @@ const DEV_ALLOWED_ORIGINS = [
     'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:5174',
 ];
 
-const PROD_ALLOWED_ORIGINS = parseOrigins(process.env.FRONTEND_URL, process.env.ALLOWED_ORIGINS);
+// Always allow these production domains (hardcoded so Docker builds work without .env)
+const HARDCODED_PROD_ORIGINS = [
+    'https://www.agentclasharena.xyz',
+    'https://agentclasharena.xyz',
+    'https://agent-clash-arena-production-da70.up.railway.app',
+];
+
+const PROD_ALLOWED_ORIGINS = [...HARDCODED_PROD_ORIGINS, ...parseOrigins(process.env.FRONTEND_URL, process.env.ALLOWED_ORIGINS)];
 const ALLOWED_ORIGINS = IS_PRODUCTION ? PROD_ALLOWED_ORIGINS : DEV_ALLOWED_ORIGINS;
 
 if (IS_PRODUCTION && ALLOWED_ORIGINS.length === 0) {
@@ -67,8 +74,9 @@ const PORT = process.env.PORT || 3001;
 
 // ── Security Middleware ──────────────────────────────────────
 app.use(helmet({
-    contentSecurityPolicy: IS_PRODUCTION ? undefined : false, // Disable CSP in dev for hot reload
+    contentSecurityPolicy: false, // Disabled — SPA serves its own assets via same-origin
     crossOriginEmbedderPolicy: false, // Allow external images/fonts
+    crossOriginResourcePolicy: { policy: 'same-site' },
 }));
 
 // ── Rate Limiting ────────────────────────────────────────────
