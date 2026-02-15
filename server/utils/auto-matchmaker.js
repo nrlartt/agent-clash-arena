@@ -901,20 +901,29 @@ class AutoMatchmaker {
             }
         }
 
-        // ── Send on-chain reward to winner's owner wallet (only if real bets exist) ──
+        // ── Auto-send reward to winning agent's owner/agent wallet ──
+        // Pool-based: 15% of monEarned goes to agent owner
+        // Base reward: small fixed reward for every win (incentivizes participation)
         const rewardWallet = winner.ownerWallet || winner.agentWallet || null;
-        if (winner.isReal && rewardWallet && totalBets > 0 && monEarned > 0) {
-            const rewardMON = monEarned * 0.15; // 15% of pool to winning agent owner
-            if (rewardMON > 0.001) {
+        if (winner.isReal && rewardWallet) {
+            const poolReward = monEarned > 0 ? monEarned * 0.15 : 0;  // 15% of pool share
+            const baseReward = 0.005;                                    // 0.005 MON base per win
+            const totalReward = poolReward + baseReward;
+
+            if (totalReward > 0.001) {
                 try {
-                    const txHash = await blockchain.sendReward(rewardWallet, rewardMON);
+                    const txHash = await blockchain.sendReward(rewardWallet, totalReward);
                     if (txHash) {
-                        logger.info(`[AutoMatchmaker] Reward sent: ${rewardMON} MON to ${rewardWallet} (${txHash})`);
+                        logger.info(`[AutoMatchmaker] Agent reward sent: ${totalReward.toFixed(4)} MON (pool: ${poolReward.toFixed(4)} + base: ${baseReward}) to ${rewardWallet} (${txHash})`);
+                    } else {
+                        logger.warn(`[AutoMatchmaker] Agent reward returned null for ${rewardWallet} (${totalReward.toFixed(4)} MON)`);
                     }
                 } catch (err) {
-                    logger.warn(`[AutoMatchmaker] Reward send failed: ${err.message}`);
+                    logger.warn(`[AutoMatchmaker] Agent reward send failed: ${err.message} | wallet: ${rewardWallet} | amount: ${totalReward.toFixed(4)}`);
                 }
             }
+        } else if (winner.isReal && !rewardWallet) {
+            logger.warn(`[AutoMatchmaker] Winner ${winner.name} has no wallet address configured — cannot send reward`);
         }
 
         // Update sim agent stats (for simulated agents only)

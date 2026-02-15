@@ -66,10 +66,9 @@ export default function Arena() {
     const [waitingMessage, setWaitingMessage] = useState(null);
 
     // ── User Bet Tracking & Claim ──
-    const [myBet, setMyBet] = useState(null);           // { side, amount, matchId }
-    const [claimState, setClaimState] = useState(null);  // null | 'ready' | 'claiming' | 'claimed' | 'lost' | 'error'
-    const [claimTxHash, setClaimTxHash] = useState(null);
-    const [claimError, setClaimError] = useState(null);
+    // pendingClaim persists across match transitions so the claim button stays visible
+    const [pendingClaim, setPendingClaim] = useState(null); // { matchId, side, amount, agentName, winnerId, status, txHash, error }
+    const [currentBetSide, setCurrentBetSide] = useState(null); // side bet on current match
 
     const { account, provider, isMonad, fetchBalance } = useWallet();
     const { inventories } = useInventory();
@@ -178,11 +177,14 @@ export default function Arena() {
                 setFightMaxRounds(3);
                 setFightRoundPaused(false);
                 setMatchKey(k => k + 1);
-                // Reset bet tracking for new match
-                setMyBet(null);
-                setClaimState(null);
-                setClaimTxHash(null);
-                setClaimError(null);
+                // Reset current-match bet tracking, but keep pendingClaim alive
+                setCurrentBetSide(null);
+                // Auto-clear claimed/lost claims after match ends
+                setPendingClaim(prev => {
+                    if (!prev) return null;
+                    if (prev.status === 'claimed' || prev.status === 'lost') return null;
+                    return prev; // Keep 'ready', 'claiming', 'error' alive
+                });
             } else if (phase === 'FIGHTING') {
                 setWaitingReason(null);
                 setWaitingMessage(null);
@@ -208,20 +210,45 @@ export default function Arena() {
                 setGameState('FINISHED');
                 setTimeLeft(10);
 
-                // Determine claim state based on user's bet
-                setMyBet(prevBet => {
-                    if (prevBet && result) {
-                        const userWon = prevBet.side === result.winnerId;
+                // Determine claim state based on user's bet on this match
+                setCurrentBetSide(prevSide => {
+                    if (prevSide && result && match) {
+                        const userWon = prevSide === result.winnerId;
+                        const betAgent = prevSide === '1' ? match.agent1 : match.agent2;
                         if (userWon && result.onChainResolved) {
-                            setClaimState('ready');
+                            setPendingClaim({
+                                matchId: match.id || result.matchId,
+                                side: prevSide,
+                                amount: null, // will be read from contract if needed
+                                agentName: betAgent?.name || 'Winner',
+                                winnerId: result.winnerId,
+                                status: 'ready',
+                                txHash: null,
+                                error: null,
+                            });
                         } else if (userWon && !result.onChainResolved) {
-                            setClaimState('error');
-                            setClaimError('Match could not be resolved on-chain. Please contact support.');
+                            setPendingClaim({
+                                matchId: match.id || result.matchId,
+                                side: prevSide,
+                                agentName: betAgent?.name || 'Winner',
+                                winnerId: result.winnerId,
+                                status: 'error',
+                                txHash: null,
+                                error: 'Match could not be resolved on-chain. Please contact support.',
+                            });
                         } else {
-                            setClaimState('lost');
+                            setPendingClaim({
+                                matchId: match.id || result.matchId,
+                                side: prevSide,
+                                agentName: betAgent?.name || '',
+                                winnerId: result.winnerId,
+                                status: 'lost',
+                                txHash: null,
+                                error: null,
+                            });
                         }
                     }
-                    return prevBet;
+                    return prevSide;
                 });
             } else if (phase === 'COOLDOWN' || phase === 'WAITING' || phase === 'IDLE') {
                 setWaitingReason(reason || null);
@@ -347,25 +374,26 @@ export default function Arena() {
 
     // ── Claim Winnings Handler ──
     const handleClaimWinnings = useCallback(async () => {
-        if (!myBet?.matchId || claimState !== 'ready') return;
-        setClaimState('claiming');
-        setClaimError(null);
+        if (!pendingClaim?.matchId || (pendingClaim.status !== 'ready' && pendingClaim.status !== 'error')) return;
+        setPendingClaim(prev => ({ ...prev, status: 'claiming', error: null }));
         try {
             // Initialize contract if needed
             if (provider && isMonad && contractService.isConfigured && !contractService.contract) {
                 await contractService.init(provider);
             }
-            const result = await contractService.claimWinnings(myBet.matchId);
-            setClaimState('claimed');
-            setClaimTxHash(result.txHash);
+            const result = await contractService.claimWinnings(pendingClaim.matchId);
+            setPendingClaim(prev => ({ ...prev, status: 'claimed', txHash: result.txHash }));
             playSound('cheer');
             if (fetchBalance) fetchBalance();
         } catch (err) {
             console.error('[Arena] claimWinnings failed:', err);
-            setClaimState('error');
-            setClaimError(err?.message || 'Failed to claim winnings.');
+            setPendingClaim(prev => ({
+                ...prev,
+                status: 'error',
+                error: err?.reason || err?.shortMessage || err?.message || 'Failed to claim winnings.',
+            }));
         }
-    }, [myBet, claimState, provider, isMonad, fetchBalance]);
+    }, [pendingClaim, provider, isMonad, fetchBalance]);
 
     // Keep timer synchronized across clients by using phase end timestamp.
     // During LIVE state, fight ticks from server provide the round timer instead.
@@ -399,11 +427,8 @@ export default function Arena() {
             }
 
             // Track user's bet for claim UI
-            if (bet.side && bet.amount && currentMatch?.id) {
-                setMyBet({ side: bet.side, amount: bet.amount, matchId: currentMatch.id, txHash: bet.txHash });
-                setClaimState(null);
-                setClaimTxHash(null);
-                setClaimError(null);
+            if (bet.side && currentMatch?.id) {
+                setCurrentBetSide(bet.side);
             }
 
             let settled = false;
@@ -1034,66 +1059,39 @@ export default function Arena() {
                                             </div>
                                         )}
 
-                                        {/* Claim Winnings Section */}
-                                        {myBet && (
+                                        {/* Claim Winnings Inline (brief summary — persistent widget is in sidebar) */}
+                                        {pendingClaim && pendingClaim.status === 'ready' && (
                                             <div className="result-claim-section">
-                                                <div className="result-claim-section__bet-info">
-                                                    <span>Your Bet: <strong>{myBet.amount} MON</strong> on <strong>{myBet.side === '1' ? currentMatch.agent1.name : currentMatch.agent2.name}</strong></span>
+                                                <button
+                                                    className="result-claim-btn result-claim-btn--ready"
+                                                    onClick={handleClaimWinnings}
+                                                >
+                                                    <Trophy size={16} />
+                                                    CLAIM WINNINGS
+                                                </button>
+                                            </div>
+                                        )}
+                                        {pendingClaim && pendingClaim.status === 'claiming' && (
+                                            <div className="result-claim-section">
+                                                <button className="result-claim-btn result-claim-btn--loading" disabled>
+                                                    <span className="spinner" />
+                                                    Claiming on Monad...
+                                                </button>
+                                            </div>
+                                        )}
+                                        {pendingClaim && pendingClaim.status === 'claimed' && (
+                                            <div className="result-claim-section">
+                                                <div className="result-claim-success">
+                                                    <Zap size={14} />
+                                                    <span>Winnings claimed!</span>
                                                 </div>
-
-                                                {claimState === 'ready' && (
-                                                    <button
-                                                        className="result-claim-btn result-claim-btn--ready"
-                                                        onClick={handleClaimWinnings}
-                                                    >
-                                                        <Trophy size={16} />
-                                                        CLAIM WINNINGS
-                                                    </button>
-                                                )}
-
-                                                {claimState === 'claiming' && (
-                                                    <button className="result-claim-btn result-claim-btn--loading" disabled>
-                                                        <span className="spinner" />
-                                                        Claiming on Monad...
-                                                    </button>
-                                                )}
-
-                                                {claimState === 'claimed' && (
-                                                    <div className="result-claim-success">
-                                                        <Zap size={14} />
-                                                        <span>Winnings claimed!</span>
-                                                        {claimTxHash && (
-                                                            <a
-                                                                href={`https://monadscan.com/tx/${claimTxHash}`}
-                                                                target="_blank"
-                                                                rel="noopener noreferrer"
-                                                                className="result-claim-success__tx"
-                                                            >
-                                                                View TX <ArrowUpRight size={10} />
-                                                            </a>
-                                                        )}
-                                                    </div>
-                                                )}
-
-                                                {claimState === 'lost' && (
-                                                    <div className="result-claim-lost">
-                                                        <span>Better luck next time!</span>
-                                                    </div>
-                                                )}
-
-                                                {claimState === 'error' && (
-                                                    <div className="result-claim-error">
-                                                        <span>{claimError || 'Claim failed'}</span>
-                                                        {myBet.side === matchResult.winnerId && (
-                                                            <button
-                                                                className="result-claim-btn result-claim-btn--retry"
-                                                                onClick={handleClaimWinnings}
-                                                            >
-                                                                Retry Claim
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                )}
+                                            </div>
+                                        )}
+                                        {pendingClaim && pendingClaim.status === 'lost' && (
+                                            <div className="result-claim-section">
+                                                <div className="result-claim-lost">
+                                                    <span>Better luck next time!</span>
+                                                </div>
                                             </div>
                                         )}
 
@@ -1127,6 +1125,83 @@ export default function Arena() {
 
                 {/* ─── RIGHT: Betting Panel ─── */}
                 <div className="arena-sidebar">
+                    {/* Persistent Claim Widget — stays visible until claimed/dismissed */}
+                    {pendingClaim && pendingClaim.status !== 'lost' && (
+                        <div className={`sidebar-claim-widget sidebar-claim-widget--${pendingClaim.status}`}>
+                            <div className="sidebar-claim-widget__header">
+                                <Trophy size={14} />
+                                <span>
+                                    {pendingClaim.status === 'ready' && 'You Won!'}
+                                    {pendingClaim.status === 'claiming' && 'Claiming...'}
+                                    {pendingClaim.status === 'claimed' && 'Claimed!'}
+                                    {pendingClaim.status === 'error' && 'Claim Issue'}
+                                </span>
+                                {pendingClaim.status === 'claimed' && (
+                                    <button
+                                        className="sidebar-claim-widget__dismiss"
+                                        onClick={() => setPendingClaim(null)}
+                                        title="Dismiss"
+                                    >
+                                        &times;
+                                    </button>
+                                )}
+                            </div>
+
+                            {pendingClaim.status === 'ready' && (
+                                <>
+                                    <p className="sidebar-claim-widget__desc">
+                                        Your bet on <strong>{pendingClaim.agentName}</strong> won! Claim your winnings from the smart contract.
+                                    </p>
+                                    <button
+                                        className="sidebar-claim-widget__btn sidebar-claim-widget__btn--claim"
+                                        onClick={handleClaimWinnings}
+                                    >
+                                        <Zap size={14} />
+                                        CLAIM WINNINGS
+                                    </button>
+                                </>
+                            )}
+
+                            {pendingClaim.status === 'claiming' && (
+                                <div className="sidebar-claim-widget__loading">
+                                    <span className="spinner" />
+                                    <span>Processing on Monad...</span>
+                                </div>
+                            )}
+
+                            {pendingClaim.status === 'claimed' && (
+                                <div className="sidebar-claim-widget__success">
+                                    <Zap size={14} />
+                                    <span>Winnings received!</span>
+                                    {pendingClaim.txHash && (
+                                        <a
+                                            href={`https://monadscan.com/tx/${pendingClaim.txHash}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="sidebar-claim-widget__tx"
+                                        >
+                                            View TX <ArrowUpRight size={10} />
+                                        </a>
+                                    )}
+                                </div>
+                            )}
+
+                            {pendingClaim.status === 'error' && (
+                                <>
+                                    <p className="sidebar-claim-widget__error-msg">
+                                        {pendingClaim.error || 'Failed to claim. Please try again.'}
+                                    </p>
+                                    <button
+                                        className="sidebar-claim-widget__btn sidebar-claim-widget__btn--retry"
+                                        onClick={handleClaimWinnings}
+                                    >
+                                        Retry Claim
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    )}
+
                     <BetPanel
                         match={currentMatch}
                         walletConnected={!!account}
