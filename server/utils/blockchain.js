@@ -141,12 +141,22 @@ class BlockchainService {
     }
 
     _init() {
-        const rpcUrl = process.env.MONAD_RPC_URL || DEFAULT_MONAD_RPC_URL;
+        const rpcUrl = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || DEFAULT_MONAD_RPC_URL;
         const privateKey = process.env.OPERATOR_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
         const contractAddress = process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS;
 
+        logger.info('[Blockchain] Init check', {
+            hasOperatorKey: !!process.env.OPERATOR_PRIVATE_KEY,
+            hasDeployerKey: !!process.env.DEPLOYER_PRIVATE_KEY,
+            hasContractAddr: !!process.env.BETTING_CONTRACT_ADDRESS,
+            hasViteContractAddr: !!process.env.VITE_BETTING_CONTRACT_ADDRESS,
+            rpcUrl,
+            privateKeyAvailable: !!privateKey,
+            contractAddressAvailable: !!contractAddress,
+        });
+
         if (!privateKey || !contractAddress) {
-            logger.info('[Blockchain] No operator key or contract address configured. On-chain features disabled.');
+            logger.error('[Blockchain] DISABLED — Missing config. Set OPERATOR_PRIVATE_KEY and BETTING_CONTRACT_ADDRESS in Railway env vars.');
             return;
         }
 
@@ -290,7 +300,10 @@ class BlockchainService {
      * Lock betting on a match (called when fight begins)
      */
     async lockMatchOnChain(matchId) {
-        if (!this.enabled) return null;
+        if (!this.enabled) {
+            logger.warn('[Blockchain] lockMatch SKIPPED — service disabled', { matchId });
+            return null;
+        }
         if (!(await this._ensureExpectedChain('lockMatch'))) return null;
 
         try {
@@ -317,7 +330,10 @@ class BlockchainService {
      * @param {string} agent1Id - ID of agent in slot 1 (AgentA)
      */
     async resolveMatchOnChain(matchId, winnerId, agent1Id) {
-        if (!this.enabled) return null;
+        if (!this.enabled) {
+            logger.warn('[Blockchain] resolveMatch SKIPPED — service disabled', { matchId, winnerId });
+            return null;
+        }
         if (!(await this._ensureExpectedChain('resolveMatch'))) return null;
 
         try {
@@ -370,27 +386,61 @@ class BlockchainService {
      * Send MON reward directly to a wallet address
      */
     async sendReward(toAddress, amountMON) {
-        if (!this.enabled) return null;
-        if (!(await this._ensureExpectedChain('sendReward'))) return null;
+        if (!this.enabled) {
+            logger.warn('[Blockchain] sendReward SKIPPED — blockchain service is disabled', {
+                to: toAddress,
+                amount: amountMON,
+                reason: 'Missing OPERATOR_PRIVATE_KEY/DEPLOYER_PRIVATE_KEY or BETTING_CONTRACT_ADDRESS',
+            });
+            return null;
+        }
+        if (!(await this._ensureExpectedChain('sendReward'))) {
+            logger.error('[Blockchain] sendReward BLOCKED — chain mismatch', { to: toAddress, amount: amountMON });
+            return null;
+        }
+
+        // Validate inputs
+        if (!toAddress || !ethers.isAddress(toAddress)) {
+            logger.error('[Blockchain] sendReward INVALID address', { to: toAddress, amount: amountMON });
+            return null;
+        }
+        if (typeof amountMON !== 'number' || amountMON <= 0 || !Number.isFinite(amountMON)) {
+            logger.error('[Blockchain] sendReward INVALID amount', { to: toAddress, amount: amountMON });
+            return null;
+        }
+
+        // Use fixed-point string to avoid scientific notation issues
+        const amountStr = amountMON.toFixed(18);
 
         try {
+            logger.info('[Blockchain] Sending reward...', {
+                to: toAddress,
+                amount: `${amountMON} MON`,
+                amountWei: amountStr,
+                from: this.wallet.address,
+            });
+
             const tx = await this.wallet.sendTransaction({
                 to: toAddress,
-                value: ethers.parseEther(String(amountMON)),
+                value: ethers.parseEther(amountStr),
                 gasLimit: 21000,
             });
             const receipt = await tx.wait();
-            logger.info('[Blockchain] Reward sent', {
+            logger.info('[Blockchain] Reward sent successfully', {
                 to: toAddress,
                 amount: `${amountMON} MON`,
                 txHash: receipt.hash,
+                blockNumber: receipt.blockNumber,
             });
             return receipt.hash;
         } catch (err) {
-            logger.error('[Blockchain] sendReward failed', {
+            const normalized = this._normalizeError(err);
+            logger.error('[Blockchain] sendReward FAILED', {
                 to: toAddress,
                 amount: amountMON,
-                error: err.message,
+                error: normalized.message,
+                code: normalized.code,
+                operatorAddress: this.wallet.address,
             });
             return null;
         }
