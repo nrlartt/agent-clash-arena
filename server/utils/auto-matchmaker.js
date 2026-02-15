@@ -1,16 +1,18 @@
 // ═══════════════════════════════════════════════════════════════
 // AUTO-MATCHMAKER — Creates matches automatically
-// - Uses real agents when available (from DB/queue)
+// - Uses REAL agents when available (from DB)
 // - Falls back to simulation agents when not enough real ones
 // - Registers matches on-chain for real betting
+// - Updates real agent stats in DB after each match
 // ═══════════════════════════════════════════════════════════════
 
 const { v4: uuidv4 } = require('uuid');
 const logger = require('./logger');
 const blockchain = require('./blockchain');
-const { generateAgentEquipment, calculateEquipmentBonus, calculateEquipmentPower, SHOP_ITEMS_BY_ID } = require('../data/shop-items');
+const db = require('../db');
+const { generateAgentEquipment } = require('../data/shop-items');
 
-// Simulation agents (used when not enough real agents)
+// Simulation agents (used ONLY when not enough real agents)
 const SIM_AGENTS = [
     { id: 'sim-a1', name: 'ShadowStrike', avatar: '🗡️', color: '#FF2D78', rank: 1, wins: 47, losses: 12, basePowerRating: 94, weapon: { name: 'Dark Blade', icon: '🗡️' }, isSimulated: true },
     { id: 'sim-a2', name: 'IronGuard', avatar: '🛡️', color: '#00F5FF', rank: 2, wins: 41, losses: 15, basePowerRating: 89, weapon: { name: 'Iron Shield', icon: '🛡️' }, isSimulated: true },
@@ -22,31 +24,54 @@ const SIM_AGENTS = [
     { id: 'sim-a8', name: 'TitanForce', avatar: '🦾', color: '#2ECC71', rank: 8, wins: 23, losses: 30, basePowerRating: 68, weapon: { name: 'Power Fist', icon: '🦾' }, isSimulated: true },
 ];
 
-// ── Generate equipment for each SIM_AGENT on startup ──
+// Assign equipment to sim agents
 SIM_AGENTS.forEach(agent => {
     const { equipped, bonus, equipmentPower } = generateAgentEquipment(agent.rank, SIM_AGENTS.length);
-    agent.equipment = equipped;          // { weapon: item, armor: item, ... }
-    agent.equipmentBonus = bonus;        // { damage: X, defense: Y, ... }
+    agent.equipment = equipped;
+    agent.equipmentBonus = bonus;
     agent.equipmentPower = equipmentPower;
-    agent.powerRating = agent.basePowerRating + Math.round(equipmentPower * 0.3); // Equipment affects power rating
-    logger.info(`[AutoMatchmaker] ${agent.name} equipped (power: ${agent.basePowerRating} + ${Math.round(equipmentPower * 0.3)} = ${agent.powerRating})`);
+    agent.powerRating = agent.basePowerRating + Math.round(equipmentPower * 0.3);
 });
+
+// Agent colors for real agents
+const AGENT_COLORS = ['#FF2D78', '#00F5FF', '#836EF9', '#FF6B35', '#69D2E7', '#FFE93E', '#9B59B6', '#2ECC71', '#E74C3C', '#1ABC9C'];
+
+// Weapon map
+const WEAPON_MAP = {
+    blade: { name: 'Blade', icon: '🗡️' },
+    mace: { name: 'Mace', icon: '🔨' },
+    scythe: { name: 'Scythe', icon: '💀' },
+    whip: { name: 'Whip', icon: '🪢' },
+    lance: { name: 'Lance', icon: '🔱' },
+    hammer: { name: 'Hammer', icon: '⚡' },
+    axe: { name: 'Axe', icon: '🪓' },
+    fist: { name: 'Fists', icon: '👊' },
+};
+
+// Strategy avatar map
+const STRATEGY_AVATAR = {
+    aggressive: '🔥',
+    defensive: '🛡️',
+    balanced: '⚖️',
+};
 
 // Match phases timing (milliseconds)
 const BETTING_DURATION = 30000;    // 30s betting window
 const FIGHT_DURATION = 195000;     // 195s fight (3 rounds × 60s + pauses + buffer)
-const RESULT_DURATION = 6000;      // 6s show result (was 10s)
-const COOLDOWN_DURATION = 3000;    // 3s between matches (was 5s)
+const RESULT_DURATION = 6000;      // 6s show result
+const COOLDOWN_DURATION = 3000;    // 3s between matches
 
 class AutoMatchmaker {
     constructor(io) {
         this.io = io;
         this.currentMatch = null;
-        this.phase = 'IDLE';       // IDLE | BETTING | FIGHTING | RESULT | COOLDOWN
+        this.phase = 'IDLE';
         this.phaseTimer = null;
         this.bettingTimeLeft = 0;
         this.bettingInterval = null;
         this.matchHistory = [];
+        this._realAgentsCache = [];
+        this._lastAgentFetch = 0;
     }
 
     start() {
@@ -71,9 +96,6 @@ class AutoMatchmaker {
         logger.info('[AutoMatchmaker] Stopped');
     }
 
-    /**
-     * Get current state for new WebSocket connections
-     */
     getState() {
         return {
             phase: this.phase,
@@ -83,12 +105,64 @@ class AutoMatchmaker {
         };
     }
 
+    // ── Fetch real agents from DB ────────────────────────────
+    async _fetchRealAgents() {
+        const now = Date.now();
+        // Cache for 30 seconds to avoid hammering DB every match cycle
+        if (now - this._lastAgentFetch < 30000 && this._realAgentsCache.length > 0) {
+            return this._realAgentsCache;
+        }
+
+        try {
+            const allAgents = await db.getAgents();
+            this._realAgentsCache = allAgents.filter(a =>
+                a.status === 'active' && a.name && a.wallet && a.wallet.address
+            );
+            this._lastAgentFetch = now;
+            logger.info(`[AutoMatchmaker] Fetched ${this._realAgentsCache.length} active real agents from DB`);
+            return this._realAgentsCache;
+        } catch (err) {
+            logger.error('[AutoMatchmaker] Failed to fetch agents from DB', { error: err.message });
+            return this._realAgentsCache; // Return stale cache on error
+        }
+    }
+
+    // ── Convert DB agent to matchmaker format ────────────────
+    _dbAgentToFighter(agent) {
+        const colorIndex = (agent.name || '').length % AGENT_COLORS.length;
+        const weaponKey = agent.weaponPreference || 'fist';
+        const weapon = WEAPON_MAP[weaponKey] || WEAPON_MAP.fist;
+        const avatar = STRATEGY_AVATAR[agent.strategy] || '⚔️';
+
+        return {
+            id: String(agent._id || agent.id),
+            dbId: agent._id || agent.id,  // Keep original DB ID for updates
+            name: agent.name,
+            avatar,
+            color: AGENT_COLORS[colorIndex],
+            rank: agent.rank || 0,
+            wins: agent.stats?.wins || 0,
+            losses: agent.stats?.losses || 0,
+            basePowerRating: agent.powerRating || 50,
+            powerRating: agent.powerRating || 50,
+            weapon,
+            isSimulated: false,
+            isReal: true,
+            strategy: agent.strategy || 'balanced',
+            ownerWallet: agent.owner?.walletAddress || null,
+            agentWallet: agent.wallet?.address || null,
+            equipment: null,
+            equipmentBonus: {},
+            equipmentPower: 0,
+        };
+    }
+
     // ── Match Lifecycle ─────────────────────────────────────
 
     async _nextMatch() {
-        // Pick two fighters
-        const [agent1, agent2] = this._pickFighters();
+        const [agent1, agent2] = await this._pickFighters();
         const matchId = `match-${uuidv4().slice(0, 8)}`;
+        const hasRealAgent = !agent1.isSimulated || !agent2.isSimulated;
 
         this.currentMatch = {
             id: matchId,
@@ -103,11 +177,12 @@ class AutoMatchmaker {
             bets: [],
             createdAt: Date.now(),
             isSimulated: agent1.isSimulated && agent2.isSimulated,
+            hasRealAgent,
             onChain: false,
             onChainTxHash: null,
         };
 
-        // Try to create match on-chain (NON-BLOCKING — never delay match start)
+        // Try to create match on-chain (NON-BLOCKING)
         blockchain.createMatchOnChain(matchId, agent1.name, agent2.name)
             .then((txHash) => {
                 if (!this.currentMatch || this.currentMatch.id !== matchId) return;
@@ -132,7 +207,8 @@ class AutoMatchmaker {
         this.io.emit('match:new', this.currentMatch);
         this.io.emit('match:phase', { phase: 'BETTING', match: this.currentMatch, timeLeft: this.bettingTimeLeft });
 
-        logger.info(`[AutoMatchmaker] New match: ${agent1.name} vs ${agent2.name} (${matchId})`);
+        const realLabel = hasRealAgent ? ' [REAL AGENTS]' : ' [SIM]';
+        logger.info(`[AutoMatchmaker] New match: ${agent1.name} vs ${agent2.name} (${matchId})${realLabel}`);
 
         // Countdown timer
         this.bettingInterval = setInterval(() => {
@@ -161,7 +237,7 @@ class AutoMatchmaker {
 
         // Simulate fight events during the fight
         const fightEvents = this._generateFightEvents();
-        fightEvents.forEach((event, i) => {
+        fightEvents.forEach((event) => {
             setTimeout(() => {
                 try {
                     this.io.emit('match:fight_event', event);
@@ -169,7 +245,7 @@ class AutoMatchmaker {
             }, event.delay);
         });
 
-        // End fight after duration — always schedule next match even if _endFight fails
+        // End fight after duration
         this.phaseTimer = setTimeout(() => {
             this._endFight().catch(err => {
                 logger.error('[AutoMatchmaker] _endFight crashed, forcing next match', { error: err.message });
@@ -178,64 +254,125 @@ class AutoMatchmaker {
         }, FIGHT_DURATION);
     }
 
-    /**
-     * Helper: always schedule the next match (RESULT → COOLDOWN → next)
-     */
     _scheduleNextMatch() {
         clearTimeout(this.phaseTimer);
         this.phase = 'COOLDOWN';
         try { this.io.emit('match:phase', { phase: 'COOLDOWN' }); } catch (e) { /* ignore */ }
-        logger.info('[AutoMatchmaker] Scheduling next match in 5s');
+        logger.info('[AutoMatchmaker] Scheduling next match in cooldown');
         this.phaseTimer = setTimeout(() => {
             this._safeNextMatch();
         }, COOLDOWN_DURATION);
     }
 
     async _endFight() {
-        // ── Determine winner based on power rating + equipment + randomness ──
         const a1 = this.currentMatch.agent1;
         const a2 = this.currentMatch.agent2;
 
-        // Base score from power rating (already includes equipment power)
+        // Determine winner based on power rating + randomness
         let a1Score = a1.powerRating + Math.random() * 40;
         let a2Score = a2.powerRating + Math.random() * 40;
 
-        // Additional combat-relevant equipment bonuses affect outcome
+        // Strategy modifiers
+        if (a1.strategy === 'aggressive') a1Score += 5;
+        if (a1.strategy === 'defensive') a1Score += 3;
+        if (a2.strategy === 'aggressive') a2Score += 5;
+        if (a2.strategy === 'defensive') a2Score += 3;
+
+        // Equipment bonuses
         const eb1 = a1.equipmentBonus || {};
         const eb2 = a2.equipmentBonus || {};
-
-        // Offensive bonus: damage, critChance, lifesteal contribute to winning
         a1Score += (eb1.damage || 0) * 0.4 + (eb1.critChance || 0) * 0.3 + (eb1.lifesteal || 0) * 0.2;
         a2Score += (eb2.damage || 0) * 0.4 + (eb2.critChance || 0) * 0.3 + (eb2.lifesteal || 0) * 0.2;
-
-        // Defensive bonus: defense, maxHP, dodgeChance help survive
         a1Score += (eb1.defense || 0) * 0.3 + (eb1.maxHP || 0) * 0.05 + (eb1.dodgeChance || 0) * 0.25;
         a2Score += (eb2.defense || 0) * 0.3 + (eb2.maxHP || 0) * 0.05 + (eb2.dodgeChance || 0) * 0.25;
-
-        // Speed & utility
         a1Score += (eb1.speed || 0) * 0.15 + (eb1.attackSpeed || 0) * 0.1;
         a2Score += (eb2.speed || 0) * 0.15 + (eb2.attackSpeed || 0) * 0.1;
 
         const winnerId = a1Score >= a2Score ? '1' : '2';
         const winner = winnerId === '1' ? a1 : a2;
         const loser = winnerId === '1' ? a2 : a1;
-
-        // Method: always Decision (KO removed)
         const method = 'Decision';
+
+        const monEarned = Math.floor(this.currentMatch.totalBets * 0.75) || Math.floor(Math.random() * 500 + 100);
 
         const result = {
             matchId: this.currentMatch.id,
             winnerId,
-            winner: { name: winner.name, avatar: winner.avatar, color: winner.color },
-            loser: { name: loser.name, avatar: loser.avatar, color: loser.color },
+            winner: { name: winner.name, avatar: winner.avatar, color: winner.color, isReal: !!winner.isReal },
+            loser: { name: loser.name, avatar: loser.avatar, color: loser.color, isReal: !!loser.isReal },
             method,
             duration: Math.floor(FIGHT_DURATION / 1000),
-            monEarned: Math.floor(this.currentMatch.totalBets * 0.75) || Math.floor(Math.random() * 500 + 100),
+            monEarned,
             totalBets: this.currentMatch.totalBets,
             timestamp: Date.now(),
+            hasRealAgent: this.currentMatch.hasRealAgent,
         };
 
-        // Resolve match on-chain (truly NON-BLOCKING — fire and forget)
+        // ── Update REAL agent stats in database ──────────────
+        if (winner.isReal && winner.dbId) {
+            try {
+                const winnerAgent = await db.getAgentById(winner.dbId);
+                if (winnerAgent) {
+                    const stats = winnerAgent.stats || {};
+                    const newWins = (stats.wins || 0) + 1;
+                    const newMatchesPlayed = (stats.matchesPlayed || 0) + 1;
+                    const newStreak = (stats.currentStreak || 0) + 1;
+                    await db.updateAgent(winnerAgent._id || winner.dbId, {
+                        stats: {
+                            ...stats,
+                            wins: newWins,
+                            matchesPlayed: newMatchesPlayed,
+                            totalEarnings: (stats.totalEarnings || 0) + monEarned,
+                            currentStreak: newStreak,
+                            killStreak: Math.max(stats.killStreak || 0, newStreak),
+                            winRate: parseFloat(((newWins / newMatchesPlayed) * 100).toFixed(1)),
+                        },
+                        powerRating: Math.min((winnerAgent.powerRating || 50) + 2, 100),
+                    });
+                    logger.info(`[AutoMatchmaker] Updated winner stats: ${winner.name} (wins: ${newWins}, streak: ${newStreak})`);
+                }
+            } catch (err) {
+                logger.error(`[AutoMatchmaker] Failed to update winner stats: ${err.message}`);
+            }
+        }
+
+        if (loser.isReal && loser.dbId) {
+            try {
+                const loserAgent = await db.getAgentById(loser.dbId);
+                if (loserAgent) {
+                    const stats = loserAgent.stats || {};
+                    const newLosses = (stats.losses || 0) + 1;
+                    const newMatchesPlayed = (stats.matchesPlayed || 0) + 1;
+                    await db.updateAgent(loserAgent._id || loser.dbId, {
+                        stats: {
+                            ...stats,
+                            losses: newLosses,
+                            matchesPlayed: newMatchesPlayed,
+                            currentStreak: 0,
+                            winRate: parseFloat(((stats.wins || 0) / newMatchesPlayed * 100).toFixed(1)),
+                        },
+                        powerRating: Math.max((loserAgent.powerRating || 50) - 1, 10),
+                    });
+                    logger.info(`[AutoMatchmaker] Updated loser stats: ${loser.name} (losses: ${newLosses})`);
+                }
+            } catch (err) {
+                logger.error(`[AutoMatchmaker] Failed to update loser stats: ${err.message}`);
+            }
+        }
+
+        // ── Send on-chain reward to winner's owner wallet ────
+        if (winner.isReal && winner.ownerWallet && monEarned > 0) {
+            const rewardMON = monEarned * 0.15; // 15% of pool to winning agent owner
+            if (rewardMON > 0.001) {
+                blockchain.sendReward(winner.ownerWallet, rewardMON)
+                    .then(txHash => {
+                        if (txHash) logger.info(`[AutoMatchmaker] Reward sent: ${rewardMON} MON to ${winner.ownerWallet} (${txHash})`);
+                    })
+                    .catch(err => logger.warn(`[AutoMatchmaker] Reward failed: ${err.message}`));
+            }
+        }
+
+        // Resolve match on-chain
         if (this.currentMatch.onChain) {
             const mId = this.currentMatch.id;
             const winnerAgentId = winnerId === '1' ? a1.id : a2.id;
@@ -245,20 +382,31 @@ class AutoMatchmaker {
                 .catch(err => logger.warn(`[AutoMatchmaker] On-chain resolve failed: ${err.message}`));
         }
 
+        // Update sim agent stats (for simulated agents only)
+        const simWinner = SIM_AGENTS.find(a => a.id === winner.id);
+        const simLoser = SIM_AGENTS.find(a => a.id === loser.id);
+        if (simWinner) simWinner.wins++;
+        if (simLoser) simLoser.losses++;
+
+        // Activity log
+        try {
+            await db.addActivity({
+                type: 'match_end',
+                message: `${winner.name} defeats ${loser.name}${winner.isReal ? ' [REAL]' : ''}! +${monEarned} MON`,
+                time: Date.now(),
+                icon: '🏆',
+            });
+        } catch (err) {
+            logger.error('[AutoMatchmaker] Activity log failed:', err.message);
+        }
+
         // RESULT phase
         this.phase = 'RESULT';
         this.currentMatch.status = 'finished';
         this.currentMatch.result = result;
 
-        // Add to history
         this.matchHistory.unshift(result);
         if (this.matchHistory.length > 20) this.matchHistory.pop();
-
-        // Update sim agent stats
-        const simWinner = SIM_AGENTS.find(a => a.id === winner.id);
-        const simLoser = SIM_AGENTS.find(a => a.id === loser.id);
-        if (simWinner) simWinner.wins++;
-        if (simLoser) simLoser.losses++;
 
         try {
             this.io.emit('match:phase', { phase: 'RESULT', match: this.currentMatch, result });
@@ -267,25 +415,44 @@ class AutoMatchmaker {
             logger.error('[AutoMatchmaker] Failed to emit result', { error: err.message });
         }
 
-        // ALWAYS schedule next match — this is the critical part
+        // ALWAYS schedule next match
         this.phaseTimer = setTimeout(() => {
             this._scheduleNextMatch();
         }, RESULT_DURATION);
 
-        logger.info(`[AutoMatchmaker] Match ${this.currentMatch.id} ended. Winner: ${winner.name} by ${method}. Next match in ${RESULT_DURATION / 1000 + COOLDOWN_DURATION / 1000}s`);
+        logger.info(`[AutoMatchmaker] Match ${this.currentMatch.id} ended. Winner: ${winner.name}${winner.isReal ? ' [REAL]' : ''} by ${method}. Next match soon.`);
     }
 
     // ── Helpers ─────────────────────────────────────────────
 
-    _pickFighters() {
-        // TODO: When real agents exist in queue, prioritize them
-        // For now: pick 2 random sim agents
+    async _pickFighters() {
+        const realAgents = await this._fetchRealAgents();
+        const activeReal = realAgents.filter(a => a.status === 'active');
+
+        if (activeReal.length >= 2) {
+            // Pick 2 random real agents
+            const shuffled = [...activeReal].sort(() => Math.random() - 0.5);
+            const fighter1 = this._dbAgentToFighter(shuffled[0]);
+            const fighter2 = this._dbAgentToFighter(shuffled[1]);
+            logger.info(`[AutoMatchmaker] Picked REAL agents: ${fighter1.name} vs ${fighter2.name}`);
+            return [fighter1, fighter2];
+        }
+
+        if (activeReal.length === 1) {
+            // 1 real agent vs 1 simulated
+            const fighter1 = this._dbAgentToFighter(activeReal[0]);
+            const simShuffled = [...SIM_AGENTS].sort(() => Math.random() - 0.5);
+            const fighter2 = simShuffled[0];
+            logger.info(`[AutoMatchmaker] Mixed match: ${fighter1.name} (REAL) vs ${fighter2.name} (SIM)`);
+            return [fighter1, fighter2];
+        }
+
+        // No real agents — use sim agents
         const shuffled = [...SIM_AGENTS].sort(() => Math.random() - 0.5);
         return [shuffled[0], shuffled[1]];
     }
 
     _formatAgent(agent) {
-        // Build equipment summary for frontend display
         const equippedItems = [];
         if (agent.equipment) {
             for (const [slot, item] of Object.entries(agent.equipment)) {
@@ -304,6 +471,7 @@ class AutoMatchmaker {
 
         return {
             id: agent.id,
+            dbId: agent.dbId || null,
             name: agent.name,
             avatar: agent.avatar,
             color: agent.color,
@@ -314,7 +482,10 @@ class AutoMatchmaker {
             basePowerRating: agent.basePowerRating || agent.powerRating || 50,
             weapon: agent.weapon || { name: 'Fists', icon: '👊' },
             isSimulated: !!agent.isSimulated,
-            // Equipment data — used by frontend GameEngine for combat bonuses
+            isReal: !!agent.isReal,
+            strategy: agent.strategy || 'balanced',
+            ownerWallet: agent.ownerWallet || null,
+            agentWallet: agent.agentWallet || null,
             equipmentBonus: agent.equipmentBonus || null,
             equipmentPower: agent.equipmentPower || 0,
             equippedItems,
@@ -353,9 +524,6 @@ class AutoMatchmaker {
         return events.sort((a, b) => a.delay - b.delay);
     }
 
-    /**
-     * Record a user's bet on the current match
-     */
     recordBet(side, amount, address) {
         if (!this.currentMatch || this.phase !== 'BETTING') return null;
 
@@ -376,7 +544,6 @@ class AutoMatchmaker {
             this.currentMatch.agent2Odds = parseFloat((total / this.currentMatch.agent2Bets).toFixed(2));
         }
 
-        // Broadcast updated match
         this.io.emit('match:update', this.currentMatch);
         return bet;
     }
