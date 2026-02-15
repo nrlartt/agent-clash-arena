@@ -40,6 +40,8 @@ class BlockchainService {
         this.provider = null;
         this.wallet = null;
         this.contract = null;
+        this.rpcUrl = null;
+        this.networkChainId = null;
         this.enabled = false;
         this.lastError = null;
         this.lastErrorCode = null;
@@ -70,7 +72,7 @@ class BlockchainService {
 
         const raw = details.find((item) => !/could not coalesce error/i.test(item)) || details[0] || 'Unknown blockchain error';
         const lowered = raw.toLowerCase();
-        if (lowered.includes('insufficient funds')) {
+        if (lowered.includes('insufficient funds') || lowered.includes('insufficient balance') || lowered.includes('signer had insufficient balance')) {
             return { code: 'INSUFFICIENT_FUNDS', message: raw };
         }
         if (lowered.includes('only operator') || lowered.includes('unauthorized')) {
@@ -133,7 +135,7 @@ class BlockchainService {
     }
 
     _init() {
-        const rpcUrl = process.env.VITE_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
+        const rpcUrl = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
         const privateKey = process.env.OPERATOR_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
         const contractAddress = process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS;
 
@@ -143,6 +145,7 @@ class BlockchainService {
         }
 
         try {
+            this.rpcUrl = rpcUrl;
             this.provider = new ethers.JsonRpcProvider(rpcUrl);
             this.wallet = new ethers.Wallet(privateKey, this.provider);
             this.contract = new ethers.Contract(contractAddress, BETTING_ABI, this.wallet);
@@ -152,6 +155,10 @@ class BlockchainService {
                 contract: contractAddress,
                 rpc: rpcUrl,
             });
+            // Resolve chain id asynchronously for diagnostics.
+            this.provider.getNetwork()
+                .then((net) => { this.networkChainId = Number(net.chainId); })
+                .catch((err) => logger.warn('[Blockchain] Failed to read network chainId', { error: err.message }));
         } catch (err) {
             logger.error('[Blockchain] Init failed', { error: err.message });
         }
@@ -359,7 +366,8 @@ class BlockchainService {
             enabled: this.enabled,
             walletAddress: this.wallet?.address || null,
             contractAddress: this.contract?.target || null,
-            rpcUrl: this.provider?.connection?.url || null,
+            rpcUrl: this.rpcUrl || null,
+            chainId: this.networkChainId,
             lastError: this.lastError || null,
             lastErrorCode: this.lastErrorCode || null,
             lastErrorAt: this.lastErrorAt || null,
@@ -373,6 +381,9 @@ class BlockchainService {
         let operator = null;
         let signerIsOwner = null;
         let signerIsOperator = null;
+        let ownerReadError = null;
+        let operatorReadError = null;
+        let contractCodeSize = null;
 
         try {
             operatorBalance = await this.getOperatorBalance();
@@ -381,14 +392,30 @@ class BlockchainService {
         }
 
         try {
-            owner = await this.contract.owner();
+            const net = await this.provider.getNetwork();
+            this.networkChainId = Number(net.chainId);
         } catch {
+            // keep previous value
+        }
+
+        try {
+            const code = await this.provider.getCode(this.contract.target);
+            contractCodeSize = code && code !== '0x' ? code.length : 0;
+        } catch {
+            contractCodeSize = null;
+        }
+
+        try {
+            owner = await this.contract.owner();
+        } catch (err) {
             owner = null;
+            ownerReadError = this._normalizeError(err).message;
         }
         try {
             operator = await this.contract.operator();
-        } catch {
+        } catch (err) {
             operator = null;
+            operatorReadError = this._normalizeError(err).message;
         }
 
         if (owner && this.wallet?.address) {
@@ -405,6 +432,9 @@ class BlockchainService {
             operatorBalance,
             signerIsOwner,
             signerIsOperator,
+            ownerReadError,
+            operatorReadError,
+            contractCodeSize,
         };
     }
 }
