@@ -45,8 +45,33 @@ function resolveBetErrorMessage(err) {
         return 'Insufficient MON balance for bet and gas.';
     }
 
+    if (raw.includes('contract would revert')) {
+        // Pre-flight caught the revert reason — show it directly
+        return err?.message || 'Contract would revert. Match may not be open for betting.';
+    }
+
+    if (raw.includes('does not exist')) {
+        return 'Match does not exist on-chain yet. Wait a few seconds and try again.';
+    }
+
+    if (raw.includes('betting closed') || raw.includes('not open')) {
+        return 'Betting is closed for this match. The fight may have already started.';
+    }
+
+    if (raw.includes('already bet')) {
+        return 'You have already placed a bet on this match.';
+    }
+
+    if (raw.includes('below minimum')) {
+        return 'Bet amount is below the minimum (0.01 MON).';
+    }
+
+    if (raw.includes('above maximum')) {
+        return 'Bet amount exceeds the maximum (1000 MON).';
+    }
+
     if (raw.includes('execution reverted')) {
-        return 'Transaction reverted by contract. Check that bets are open and you have not already bet this match.';
+        return 'Transaction reverted by contract. The match may not be open or you already bet.';
     }
 
     return err?.shortMessage || err?.message || 'Bet could not be placed.';
@@ -172,17 +197,23 @@ export default function BetPanel({
             const isOnChainMatch = Boolean(match.onChain && match.onChainTxHash);
 
             if (!isOnChainMatch) {
-                throw new Error('Match is not ready on-chain yet. Wait for the next on-chain round.');
+                throw new Error('Match is not registered on-chain yet. Please wait for the next match.');
             }
             if (!contractReady) {
-                throw new Error('Contract is not ready. Reconnect wallet and try again.');
+                throw new Error('Smart contract not connected. Please reconnect your wallet.');
+            }
+
+            // Pre-flight: verify the match is Open on-chain before sending a tx
+            const check = await contractService.checkMatchStatus(matchId, account);
+            if (!check.ok) {
+                throw new Error(check.reason || 'Match is not available for betting on-chain.');
             }
 
             const side = selectedSide === '1' ? BetSide.AgentA : BetSide.AgentB;
             const result = await contractService.placeBet(matchId, side, betAmount);
             setTxHash(result.txHash);
 
-            // Notify parent (Arena) and wait for backend confirmation.
+            // Notify backend via socket
             if (onBetPlaced) {
                 const confirmation = await onBetPlaced({
                     side: selectedSide,
@@ -193,12 +224,13 @@ export default function BetPanel({
                 });
 
                 if (confirmation && confirmation.ok === false) {
-                    throw new Error(confirmation.error || 'Bet rejected by live arena');
+                    // Bet was placed on-chain but rejected by backend — still show success since MON is committed
+                    console.warn('[BetPanel] Backend rejected bet, but on-chain tx succeeded:', confirmation.error);
                 }
             }
 
             setBetStatus('success');
-            setBetMessage(`On-chain bet placed! TX: ${result.txHash.slice(0, 10)}...`);
+            setBetMessage(`Bet placed on-chain! TX: ${result.txHash.slice(0, 10)}...`);
 
             playSound('cheer');
             setBetAmount('');

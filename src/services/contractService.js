@@ -43,10 +43,13 @@ export const MatchStatus = {
     Cancelled: 3,
 };
 
+const STATUS_LABELS = ['Open', 'Locked', 'Resolved', 'Cancelled'];
+
 class ContractService {
     constructor() {
         this.contractAddress = import.meta.env.VITE_BETTING_CONTRACT_ADDRESS || null;
         this.contract = null;
+        this.readContract = null; // Read-only contract (via RPC, no signer needed)
         this.provider = null;
         this.signer = null;
     }
@@ -72,6 +75,10 @@ class ContractService {
                 BETTING_ABI,
                 this.signer
             );
+            // Also create a read-only contract via default RPC for pre-flight checks
+            const rpcUrl = import.meta.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
+            const rpcProvider = new ethers.JsonRpcProvider(rpcUrl);
+            this.readContract = new ethers.Contract(this.contractAddress, BETTING_ABI, rpcProvider);
             console.log('[Contract] Initialized at', this.contractAddress);
             return true;
         } catch (err) {
@@ -88,6 +95,47 @@ class ContractService {
     }
 
     /**
+     * Pre-flight: check match status on-chain before placing a bet.
+     * Returns { ok, status, reason } where ok means betting is allowed.
+     */
+    async checkMatchStatus(matchId, userAddress) {
+        const reader = this.readContract || this.contract;
+        if (!reader) return { ok: false, reason: 'Contract not initialized' };
+
+        try {
+            const matchBytes = this.matchIdToBytes32(matchId);
+            const m = await reader.getMatch(matchBytes);
+            const status = Number(m.status);
+            const createdAt = Number(m.createdAt);
+
+            if (createdAt === 0) {
+                return { ok: false, status: -1, reason: `Match "${matchId}" does not exist on-chain. The match may not have been registered yet.` };
+            }
+            if (status !== MatchStatus.Open) {
+                return { ok: false, status, reason: `Match is ${STATUS_LABELS[status] || 'unknown'} (not Open). Betting is closed.` };
+            }
+
+            // Check if user already bet
+            if (userAddress) {
+                try {
+                    const bet = await reader.getUserBet(matchBytes, userAddress);
+                    if (Number(bet.amount) > 0) {
+                        return { ok: false, status, reason: 'You have already placed a bet on this match.' };
+                    }
+                } catch {
+                    // getUserBet reverts with "No bet found" if user hasn't bet — that's fine
+                }
+            }
+
+            return { ok: true, status, poolA: ethers.formatEther(m.poolA), poolB: ethers.formatEther(m.poolB) };
+        } catch (err) {
+            console.warn('[Contract] checkMatchStatus failed:', err.message);
+            // Don't block — let the actual placeBet handle errors
+            return { ok: true, reason: 'Could not verify match on-chain (proceeding anyway)' };
+        }
+    }
+
+    /**
      * Place a bet on-chain
      * @param {string} matchId - Match identifier
      * @param {number} side - BetSide.AgentA or BetSide.AgentB
@@ -100,18 +148,33 @@ class ContractService {
         const matchBytes = this.matchIdToBytes32(matchId);
         const value = ethers.parseEther(amountMON);
 
-        // Gas usage on Monad can vary by state; fixed caps caused out-of-gas reverts in production.
+        // Estimate gas FIRST — if this fails, the tx would revert on-chain.
+        // Do NOT fall back to a hardcoded gasLimit to avoid wasting gas on revert.
         let gasLimit;
         try {
             const estimatedGas = await this.contract.placeBet.estimateGas(matchBytes, side, { value });
-            gasLimit = (estimatedGas * 120n) / 100n; // +20% headroom
-        } catch {
-            // Fallback for nodes that fail estimation intermittently.
-            gasLimit = 500000n;
+            gasLimit = (estimatedGas * 130n) / 100n; // +30% headroom
+            console.log('[Contract] Gas estimate for placeBet:', Number(estimatedGas), '→ using', Number(gasLimit));
+        } catch (estimateErr) {
+            // Gas estimation failed = the tx WILL revert. Surface the reason.
+            console.error('[Contract] placeBet gas estimation failed:', estimateErr);
+            
+            // Try to extract the revert reason
+            const reason = estimateErr?.reason 
+                || estimateErr?.revert?.args?.[0]
+                || estimateErr?.info?.error?.message
+                || estimateErr?.error?.message
+                || estimateErr?.shortMessage
+                || estimateErr?.message
+                || 'Unknown reason';
+            
+            const enrichedError = new Error(`Contract would revert: ${reason}`);
+            enrichedError.code = 'CALL_EXCEPTION';
+            enrichedError.originalError = estimateErr;
+            throw enrichedError;
         }
 
         const tx = await this.contract.placeBet(matchBytes, side, { value, gasLimit });
-        
         const receipt = await tx.wait();
         return {
             txHash: receipt.hash,
@@ -126,7 +189,17 @@ class ContractService {
         if (!this.contract) throw new Error('Contract not initialized');
         
         const matchBytes = this.matchIdToBytes32(matchId);
-        const tx = await this.contract.claimWinnings(matchBytes, { gasLimit: 150000 });
+        
+        // Estimate gas first
+        let gasLimit;
+        try {
+            const est = await this.contract.claimWinnings.estimateGas(matchBytes);
+            gasLimit = (est * 130n) / 100n;
+        } catch (err) {
+            throw new Error(`Cannot claim winnings: ${err.reason || err.message}`);
+        }
+        
+        const tx = await this.contract.claimWinnings(matchBytes, { gasLimit });
         const receipt = await tx.wait();
         return { txHash: receipt.hash };
     }
@@ -138,7 +211,16 @@ class ContractService {
         if (!this.contract) throw new Error('Contract not initialized');
         
         const matchBytes = this.matchIdToBytes32(matchId);
-        const tx = await this.contract.claimRefund(matchBytes, { gasLimit: 150000 });
+        
+        let gasLimit;
+        try {
+            const est = await this.contract.claimRefund.estimateGas(matchBytes);
+            gasLimit = (est * 130n) / 100n;
+        } catch (err) {
+            throw new Error(`Cannot claim refund: ${err.reason || err.message}`);
+        }
+        
+        const tx = await this.contract.claimRefund(matchBytes, { gasLimit });
         const receipt = await tx.wait();
         return { txHash: receipt.hash };
     }
@@ -147,19 +229,22 @@ class ContractService {
      * Get match details from the contract
      */
     async getMatchDetails(matchId) {
-        if (!this.contract) return null;
+        const reader = this.readContract || this.contract;
+        if (!reader) return null;
         
         try {
             const matchBytes = this.matchIdToBytes32(matchId);
-            const match = await this.contract.getMatch(matchBytes);
+            const match = await reader.getMatch(matchBytes);
             return {
                 agentAName: match.agentAName,
                 agentBName: match.agentBName,
                 status: Number(match.status),
+                statusLabel: STATUS_LABELS[Number(match.status)] || 'Unknown',
                 winningSide: Number(match.winningSide),
                 poolA: ethers.formatEther(match.poolA),
                 poolB: ethers.formatEther(match.poolB),
                 totalPool: ethers.formatEther(match.totalPool),
+                createdAt: Number(match.createdAt),
             };
         } catch {
             return null;
@@ -170,11 +255,12 @@ class ContractService {
      * Get current odds for a match
      */
     async getOdds(matchId) {
-        if (!this.contract) return { oddsA: 2.0, oddsB: 2.0 };
+        const reader = this.readContract || this.contract;
+        if (!reader) return { oddsA: 2.0, oddsB: 2.0 };
         
         try {
             const matchBytes = this.matchIdToBytes32(matchId);
-            const [oddsA, oddsB] = await this.contract.getOdds(matchBytes);
+            const [oddsA, oddsB] = await reader.getOdds(matchBytes);
             return {
                 oddsA: Number(oddsA) / 10000,
                 oddsB: Number(oddsB) / 10000,
@@ -188,11 +274,12 @@ class ContractService {
      * Get the user's bet on a match
      */
     async getUserBet(matchId, userAddress) {
-        if (!this.contract) return null;
+        const reader = this.readContract || this.contract;
+        if (!reader) return null;
         
         try {
             const matchBytes = this.matchIdToBytes32(matchId);
-            const bet = await this.contract.getUserBet(matchBytes, userAddress);
+            const bet = await reader.getUserBet(matchBytes, userAddress);
             return {
                 side: Number(bet.side),
                 amount: ethers.formatEther(bet.amount),
@@ -207,13 +294,14 @@ class ContractService {
      * Get platform stats from contract
      */
     async getPlatformStats() {
-        if (!this.contract) return null;
+        const reader = this.readContract || this.contract;
+        if (!reader) return null;
         
         try {
             const [totalMatches, totalBets, totalVol] = await Promise.all([
-                this.contract.totalMatches(),
-                this.contract.totalBetsPlaced(),
-                this.contract.totalVolume(),
+                reader.totalMatches(),
+                reader.totalBetsPlaced(),
+                reader.totalVolume(),
             ]);
             return {
                 totalMatches: Number(totalMatches),
@@ -229,12 +317,13 @@ class ContractService {
      * Get min/max bet limits
      */
     async getBetLimits() {
-        if (!this.contract) return { min: '0.01', max: '1000' };
+        const reader = this.readContract || this.contract;
+        if (!reader) return { min: '0.01', max: '1000' };
         
         try {
             const [min, max] = await Promise.all([
-                this.contract.minBet(),
-                this.contract.maxBet(),
+                reader.minBet(),
+                reader.maxBet(),
             ]);
             return {
                 min: ethers.formatEther(min),
