@@ -10,7 +10,11 @@ import { BrowserProvider, formatEther, JsonRpcProvider } from 'ethers';
 
 const MONAD_CHAIN_ID = 143;
 const MONAD_CHAIN_ID_HEX = '0x8F';
-const MONAD_RPC_URL = import.meta.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
+const DEFAULT_MONAD_RPC_URL = 'https://rpc.monad.xyz';
+const RAW_MONAD_RPC_URL = String(import.meta.env.VITE_MONAD_RPC_URL || '').trim();
+const MONAD_RPC_URL = (import.meta.env.PROD && /testnet/i.test(RAW_MONAD_RPC_URL))
+    ? DEFAULT_MONAD_RPC_URL
+    : (RAW_MONAD_RPC_URL || DEFAULT_MONAD_RPC_URL);
 const MANUAL_DISCONNECT_KEY = 'aca_wallet_manually_disconnected';
 
 // Monad Explorer URL
@@ -75,6 +79,10 @@ export function WalletProvider({ children }) {
         const walletAddress = String(addr);
         try {
             const rpc = getRpcProvider();
+            const rpcNetwork = await rpc.getNetwork();
+            if (Number(rpcNetwork.chainId) !== MONAD_CHAIN_ID) {
+                throw new Error(`Configured RPC chain mismatch: expected ${MONAD_CHAIN_ID}, got ${Number(rpcNetwork.chainId)}`);
+            }
             const bal = await rpc.getBalance(walletAddress);
             const formatted = formatEther(bal);
             setBalance(formatted);

@@ -128,6 +128,8 @@ On-chain reliability env vars (optional):
 - `ONCHAIN_BETTING_REQUIRED` (default `true`)
 - `CHAIN_TX_SEND_TIMEOUT_MS` (default `30000`)
 - `CHAIN_TX_WAIT_TIMEOUT_MS` (default `180000`)
+- `MONAD_RPC_URL` (backend runtime RPC, should be `https://rpc.monad.xyz` on mainnet)
+- `MONAD_CHAIN_ID` (default `143`; backend blocks writes if RPC chain id mismatches)
 
 ## Notes
 

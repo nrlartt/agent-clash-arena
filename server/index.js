@@ -351,7 +351,7 @@ io.use((socket, next) => {
 const AutoMatchmaker = require('./utils/auto-matchmaker');
 const matchmaker = new AutoMatchmaker(io);
 const BETTING_CONTRACT_ADDRESS = String(process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS || '').trim();
-const BETTING_RPC_URL = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
+const BETTING_RPC_URL = process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
 const ONCHAIN_BETTING_REQUIRED = process.env.ONCHAIN_BETTING_REQUIRED !== 'false';
 const bettingTxProvider = BETTING_CONTRACT_ADDRESS ? new ethers.JsonRpcProvider(BETTING_RPC_URL) : null;
 const bettingInterface = new ethers.Interface(['function placeBet(bytes32 _matchId, uint8 _side)']);

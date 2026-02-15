@@ -12,6 +12,8 @@ const BETTING_ABI = [
     "function lockMatch(bytes32 _matchId) external",
     "function resolveMatch(bytes32 _matchId, uint8 _winningSide) external",
     "function cancelMatch(bytes32 _matchId) external",
+    "function owner() external view returns (address)",
+    "function operator() external view returns (address)",
     "function getMatch(bytes32 _matchId) external view returns (tuple(bytes32 matchId, string agentAName, string agentBName, uint8 status, uint8 winningSide, uint256 poolA, uint256 poolB, uint256 totalPool, uint256 createdAt, uint256 resolvedAt))",
     "function totalMatches() external view returns (uint256)",
     "function totalVolume() external view returns (uint256)",
@@ -30,6 +32,8 @@ function withTimeout(promise, ms, label) {
 const TX_SEND_TIMEOUT = Number.parseInt(process.env.CHAIN_TX_SEND_TIMEOUT_MS || '30000', 10);
 const TX_WAIT_TIMEOUT = Number.parseInt(process.env.CHAIN_TX_WAIT_TIMEOUT_MS || '180000', 10);
 const TX_RETRY_COUNT = Math.max(1, Number.parseInt(process.env.CHAIN_TX_RETRY_COUNT || '3', 10));
+const DEFAULT_MONAD_RPC_URL = 'https://rpc.monad.xyz';
+const EXPECTED_MONAD_CHAIN_ID = Number.parseInt(process.env.MONAD_CHAIN_ID || '143', 10);
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,6 +46,8 @@ class BlockchainService {
         this.contract = null;
         this.rpcUrl = null;
         this.networkChainId = null;
+        this.expectedChainId = Number.isFinite(EXPECTED_MONAD_CHAIN_ID) ? EXPECTED_MONAD_CHAIN_ID : 143;
+        this.chainMismatch = false;
         this.enabled = false;
         this.lastError = null;
         this.lastErrorCode = null;
@@ -135,7 +141,7 @@ class BlockchainService {
     }
 
     _init() {
-        const rpcUrl = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
+        const rpcUrl = process.env.MONAD_RPC_URL || DEFAULT_MONAD_RPC_URL;
         const privateKey = process.env.OPERATOR_PRIVATE_KEY || process.env.DEPLOYER_PRIVATE_KEY;
         const contractAddress = process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS;
 
@@ -154,13 +160,48 @@ class BlockchainService {
                 operator: this.wallet.address,
                 contract: contractAddress,
                 rpc: rpcUrl,
+                expectedChainId: this.expectedChainId,
             });
             // Resolve chain id asynchronously for diagnostics.
-            this.provider.getNetwork()
-                .then((net) => { this.networkChainId = Number(net.chainId); })
+            this._refreshNetworkChainId()
                 .catch((err) => logger.warn('[Blockchain] Failed to read network chainId', { error: err.message }));
         } catch (err) {
             logger.error('[Blockchain] Init failed', { error: err.message });
+        }
+    }
+
+    async _refreshNetworkChainId() {
+        if (!this.provider) return null;
+        const net = await this.provider.getNetwork();
+        const chainId = Number(net.chainId);
+        this.networkChainId = chainId;
+        this.chainMismatch = Number.isFinite(this.expectedChainId) && chainId !== this.expectedChainId;
+        return chainId;
+    }
+
+    async _ensureExpectedChain(op) {
+        try {
+            const chainId = await this._refreshNetworkChainId();
+            if (!Number.isFinite(this.expectedChainId) || !Number.isFinite(chainId)) return true;
+            if (chainId === this.expectedChainId) return true;
+            const message = `RPC chainId mismatch (expected ${this.expectedChainId}, got ${chainId})`;
+            this.lastError = message;
+            this.lastErrorCode = 'CHAIN_ID_MISMATCH';
+            this.lastErrorAt = Date.now();
+            this.lastErrorOp = op;
+            logger.error('[Blockchain] Operation blocked due to chain mismatch', {
+                op,
+                expectedChainId: this.expectedChainId,
+                chainId,
+                rpcUrl: this.rpcUrl,
+            });
+            return false;
+        } catch (err) {
+            logger.warn('[Blockchain] Could not verify chain id before operation', {
+                op,
+                error: err.message,
+            });
+            return true;
         }
     }
 
@@ -185,6 +226,9 @@ class BlockchainService {
         if (!this.enabled) {
             logger.debug('[Blockchain] Skipping createMatch (disabled)');
             return { ok: false, errorCode: 'DISABLED', errorMessage: 'Blockchain service is disabled (missing key or contract)' };
+        }
+        if (!(await this._ensureExpectedChain('createMatch'))) {
+            return { ok: false, errorCode: this.lastErrorCode, errorMessage: this.lastError };
         }
 
         const matchBytes = this._toBytes32(matchId);
@@ -247,6 +291,7 @@ class BlockchainService {
      */
     async lockMatchOnChain(matchId) {
         if (!this.enabled) return null;
+        if (!(await this._ensureExpectedChain('lockMatch'))) return null;
 
         try {
             const matchBytes = this._toBytes32(matchId);
@@ -273,6 +318,7 @@ class BlockchainService {
      */
     async resolveMatchOnChain(matchId, winnerId, agent1Id) {
         if (!this.enabled) return null;
+        if (!(await this._ensureExpectedChain('resolveMatch'))) return null;
 
         try {
             const matchBytes = this._toBytes32(matchId);
@@ -306,6 +352,7 @@ class BlockchainService {
      */
     async cancelMatchOnChain(matchId) {
         if (!this.enabled) return null;
+        if (!(await this._ensureExpectedChain('cancelMatch'))) return null;
 
         try {
             const matchBytes = this._toBytes32(matchId);
@@ -324,6 +371,7 @@ class BlockchainService {
      */
     async sendReward(toAddress, amountMON) {
         if (!this.enabled) return null;
+        if (!(await this._ensureExpectedChain('sendReward'))) return null;
 
         try {
             const tx = await this.wallet.sendTransaction({
@@ -368,6 +416,8 @@ class BlockchainService {
             contractAddress: this.contract?.target || null,
             rpcUrl: this.rpcUrl || null,
             chainId: this.networkChainId,
+            expectedChainId: this.expectedChainId,
+            chainMismatch: this.chainMismatch,
             lastError: this.lastError || null,
             lastErrorCode: this.lastErrorCode || null,
             lastErrorAt: this.lastErrorAt || null,
@@ -392,8 +442,7 @@ class BlockchainService {
         }
 
         try {
-            const net = await this.provider.getNetwork();
-            this.networkChainId = Number(net.chainId);
+            await this._refreshNetworkChainId();
         } catch {
             // keep previous value
         }

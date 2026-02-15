@@ -9,8 +9,8 @@ const { sendTelegramMessage } = require('./telegram');
 const { AgentWalletError, createSignerForAgent } = require('./agent-wallet');
 const { SHOP_ITEMS, SHOP_ITEMS_BY_ID, EQUIPPABLE_SLOTS } = require('../data/shop-items');
 
-const MONAD_RPC_URL = process.env.VITE_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
-const MONAD_CHAIN_ID = 143;
+const MONAD_RPC_URL = process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
+const MONAD_CHAIN_ID = Number.parseInt(process.env.MONAD_CHAIN_ID || '143', 10);
 const MONAD_EXPLORER_TX_BASE = process.env.MONAD_EXPLORER_TX_BASE || 'https://monadscan.com/tx/';
 const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || '';
 const ORDER_TTL_MINUTES = Math.min(Math.max(parseInt(process.env.SHOP_ORDER_TTL_MINUTES || '30', 10), 5), 180);
