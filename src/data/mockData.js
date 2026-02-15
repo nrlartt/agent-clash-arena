@@ -494,16 +494,12 @@ export const REGISTRATION_STEPS = [
 // ── Monad Config ─────────────────────────────────────────────
 export const MONAD_CONFIG = {
     chainId: 143,
-    chainName: 'Monad',
+    chainName: 'Monad Mainnet',
     rpcUrl: 'https://rpc.monad.xyz',
-    blockExplorer: 'https://monadvision.com',
+    blockExplorer: 'https://monadscan.com',
     nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
     contracts: {
-        agentRegistry: '0x0000000000000000000000000000000000000000',
-        bettingPool: '0x0000000000000000000000000000000000000000',
-        matchFactory: '0x0000000000000000000000000000000000000000',
-        rewardDistributor: '0x0000000000000000000000000000000000000000',
-        agentWallet: '0x0000000000000000000000000000000000000000',
+        betting: import.meta.env.VITE_BETTING_CONTRACT_ADDRESS || '0xad593Efa1971a2Ed7977b294efbdbB84dc23B38f',
     },
 };
 

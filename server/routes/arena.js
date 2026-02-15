@@ -444,6 +444,21 @@ router.post('/admin/reset-agents', requireAdmin, async (req, res) => {
     });
 });
 
+// ── POST /arena/admin/force-new-match ── Force restart current match with updated pool settings
+router.post('/admin/force-new-match', requireAdmin, async (_req, res) => {
+    const matchmaker = _req.app?.locals?.matchmaker;
+    if (!matchmaker) {
+        return res.status(500).json({ success: false, error: 'Matchmaker not available' });
+    }
+    matchmaker.forceReset('ADMIN_RESTART', 'Admin forced new match with updated pool settings.');
+    setTimeout(() => {
+        if (matchmaker.phase === 'WAITING') {
+            matchmaker._scheduleNextMatch();
+        }
+    }, 2000);
+    return res.json({ success: true, message: 'Match restarted with new pool settings (1000 MON min)' });
+});
+
 // ── Matchmaking Logic ────────────────────────────────────────
 async function tryMatchmaking(io) {
     if (matchQueue.length < 2) return null;

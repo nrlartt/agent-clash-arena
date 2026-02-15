@@ -1,19 +1,146 @@
 // ═══════════════════════════════════════════════════════════════
-// STATS PAGE — Platform statistics & blockchain info
+// STATS PAGE — Real-time platform statistics & blockchain info
+// Fetches live data from API + on-chain contract
 // ═══════════════════════════════════════════════════════════════
 
-import { BarChart3, Zap, Users, Swords, Clock, Shield, TrendingUp, Globe, Cpu, ExternalLink } from 'lucide-react';
-import { PLATFORM_STATS, MONAD_CONFIG, AGENTS } from '../data/mockData';
+import { useState, useEffect, useCallback } from 'react';
+import {
+    BarChart3, Zap, Users, Swords, Clock, Shield, TrendingUp,
+    Globe, Cpu, ExternalLink, Activity, Wallet, ArrowUpRight,
+    RefreshCw, Trophy, Flame
+} from 'lucide-react';
+import { MONAD_CONFIG } from '../data/mockData';
 import './Stats.css';
 
+const API_URL = import.meta.env.VITE_API_URL || '/api/v1';
+const CONTRACT_ADDRESS = import.meta.env.VITE_BETTING_CONTRACT_ADDRESS || '0xad593Efa1971a2Ed7977b294efbdbB84dc23B38f';
+
 export default function Stats() {
-    const stats = [
-        { icon: Swords, label: 'Total Matches', value: PLATFORM_STATS.totalMatches.toLocaleString(), color: 'var(--neon-pink)' },
-        { icon: Users, label: 'Active Agents', value: PLATFORM_STATS.activeAgents, color: 'var(--neon-cyan)' },
-        { icon: Zap, label: 'MON Wagered', value: `${(PLATFORM_STATS.totalMONWagered / 1e6).toFixed(2)}M`, color: 'var(--monad-purple-light)' },
-        { icon: BarChart3, label: 'Total Bets', value: PLATFORM_STATS.totalBetsPlaced.toLocaleString(), color: 'var(--neon-green)' },
-        { icon: Clock, label: 'Avg Match Duration', value: `${Math.floor(PLATFORM_STATS.avgMatchDuration / 60)}:${String(PLATFORM_STATS.avgMatchDuration % 60).padStart(2, '0')}`, color: 'var(--neon-yellow)' },
-        { icon: TrendingUp, label: 'Online Viewers', value: PLATFORM_STATS.onlineViewers.toLocaleString(), color: 'var(--neon-orange)' },
+    const [liveStats, setLiveStats] = useState(null);
+    const [contractStats, setContractStats] = useState(null);
+    const [agents, setAgents] = useState([]);
+    const [recentResults, setRecentResults] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [lastRefresh, setLastRefresh] = useState(null);
+
+    const fetchAll = useCallback(async () => {
+        setLoading(true);
+        try {
+            const [statsRes, agentsRes, resultsRes] = await Promise.all([
+                fetch(`${API_URL}/arena/live-stats`).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/agents`).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/arena/recent-results`).then(r => r.json()).catch(() => null),
+            ]);
+
+            if (statsRes?.success && statsRes.data) setLiveStats(statsRes.data);
+            if (agentsRes?.success && Array.isArray(agentsRes.data)) setAgents(agentsRes.data);
+            if (resultsRes?.success && Array.isArray(resultsRes.data)) setRecentResults(resultsRes.data);
+
+            // Fetch on-chain contract stats via read-only RPC
+            try {
+                const { ethers } = await import('ethers');
+                const rpcUrl = import.meta.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
+                const rpcProvider = new ethers.JsonRpcProvider(rpcUrl);
+                const ABI = [
+                    "function totalMatches() external view returns (uint256)",
+                    "function totalBetsPlaced() external view returns (uint256)",
+                    "function totalVolume() external view returns (uint256)",
+                    "function platformEarnings() external view returns (uint256)",
+                    "function platformFeePercent() external view returns (uint256)",
+                    "function minBet() external view returns (uint256)",
+                    "function maxBet() external view returns (uint256)",
+                ];
+                const reader = new ethers.Contract(CONTRACT_ADDRESS, ABI, rpcProvider);
+                const [totalMatches, totalBets, totalVol, earnings, fee, minBet, maxBet] = await Promise.all([
+                    reader.totalMatches().catch(() => 0n),
+                    reader.totalBetsPlaced().catch(() => 0n),
+                    reader.totalVolume().catch(() => 0n),
+                    reader.platformEarnings().catch(() => 0n),
+                    reader.platformFeePercent().catch(() => 3n),
+                    reader.minBet().catch(() => 0n),
+                    reader.maxBet().catch(() => 0n),
+                ]);
+                setContractStats({
+                    totalMatches: Number(totalMatches),
+                    totalBetsPlaced: Number(totalBets),
+                    totalVolume: parseFloat(ethers.formatEther(totalVol)),
+                    platformEarnings: parseFloat(ethers.formatEther(earnings)),
+                    platformFeePercent: Number(fee),
+                    minBet: parseFloat(ethers.formatEther(minBet)),
+                    maxBet: parseFloat(ethers.formatEther(maxBet)),
+                });
+            } catch (err) {
+                console.warn('[Stats] Contract stats fetch failed:', err.message);
+            }
+
+            setLastRefresh(Date.now());
+        } catch (err) {
+            console.error('[Stats] Fetch failed:', err);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchAll();
+        const interval = setInterval(fetchAll, 30000);
+        return () => clearInterval(interval);
+    }, [fetchAll]);
+
+    const activeAgents = agents.filter(a => a.status === 'active').length;
+    const totalAgents = agents.length;
+    const viewers = liveStats?.viewers || 0;
+    const matchesToday = liveStats?.matchesPlayedToday || 0;
+    const betsToday = liveStats?.totalBetsToday || 0;
+
+    const topAgentsList = (liveStats?.agents || agents)
+        .filter(a => a.stats?.wins > 0 || a.wins > 0)
+        .sort((a, b) => (b.stats?.wins || b.wins || 0) - (a.stats?.wins || a.wins || 0))
+        .slice(0, 5);
+
+    const platformCards = [
+        {
+            icon: Swords,
+            label: 'On-Chain Matches',
+            value: contractStats ? contractStats.totalMatches.toLocaleString() : '—',
+            color: 'var(--neon-pink)',
+            sub: `${matchesToday} today`,
+        },
+        {
+            icon: Users,
+            label: 'Active Agents',
+            value: `${activeAgents}`,
+            color: 'var(--neon-cyan)',
+            sub: `${totalAgents} total registered`,
+        },
+        {
+            icon: Zap,
+            label: 'Total Volume',
+            value: contractStats ? `${contractStats.totalVolume.toFixed(2)} MON` : '—',
+            color: 'var(--monad-purple-light)',
+            sub: `${betsToday > 0 ? betsToday.toFixed(2) : '0'} MON today`,
+        },
+        {
+            icon: BarChart3,
+            label: 'Total Bets',
+            value: contractStats ? contractStats.totalBetsPlaced.toLocaleString() : '—',
+            color: 'var(--neon-green)',
+            sub: 'on-chain bets placed',
+        },
+        {
+            icon: Activity,
+            label: 'Live Viewers',
+            value: viewers.toLocaleString(),
+            color: 'var(--neon-yellow)',
+            sub: 'watching now',
+        },
+        {
+            icon: Wallet,
+            label: 'Platform Earnings',
+            value: contractStats ? `${contractStats.platformEarnings.toFixed(4)} MON` : '—',
+            color: 'var(--neon-orange)',
+            sub: `${contractStats?.platformFeePercent || 3}% fee`,
+        },
     ];
 
     const monadFeatures = [
@@ -28,16 +155,33 @@ export default function Stats() {
             <div className="container">
                 {/* Header */}
                 <div className="stats-header">
-                    <h1 className="stats-header__title text-display">
-                        <BarChart3 size={28} style={{ color: 'var(--neon-green)' }} />
-                        <span className="text-gradient">Platform Stats</span>
-                    </h1>
-                    <p className="stats-header__sub">Real-time statistics from the Agent Clash Arena ecosystem</p>
+                    <div className="stats-header__row">
+                        <h1 className="stats-header__title text-display">
+                            <BarChart3 size={28} style={{ color: 'var(--neon-green)' }} />
+                            <span className="text-gradient">Platform Stats</span>
+                        </h1>
+                        <button
+                            className="stats-refresh-btn"
+                            onClick={fetchAll}
+                            disabled={loading}
+                            title="Refresh stats"
+                        >
+                            <RefreshCw size={14} className={loading ? 'spinning' : ''} />
+                            {lastRefresh && (
+                                <span className="stats-refresh-time">
+                                    Updated {Math.round((Date.now() - lastRefresh) / 1000)}s ago
+                                </span>
+                            )}
+                        </button>
+                    </div>
+                    <p className="stats-header__sub">
+                        Live statistics from Agent Clash Arena on Monad Mainnet
+                    </p>
                 </div>
 
                 {/* Stats Grid */}
                 <div className="stats-grid" id="stats-grid">
-                    {stats.map((stat, idx) => (
+                    {platformCards.map((stat, idx) => (
                         <div key={idx} className="stats-card glass-card" id={`stat-${idx}`}>
                             <div className="stats-card__icon" style={{ color: stat.color }}>
                                 <stat.icon size={24} />
@@ -47,10 +191,72 @@ export default function Stats() {
                                     {stat.value}
                                 </span>
                                 <span className="stats-card__label">{stat.label}</span>
+                                {stat.sub && <span className="stats-card__sub">{stat.sub}</span>}
                             </div>
                         </div>
                     ))}
                 </div>
+
+                {/* Top Agents Leaderboard */}
+                {topAgentsList.length > 0 && (
+                    <div className="stats-leaderboard glass-card" id="top-agents">
+                        <h3 className="stats-leaderboard__title text-display">
+                            <Trophy size={18} style={{ color: '#FFE93E' }} />
+                            Top Fighters
+                        </h3>
+                        <div className="stats-leaderboard__list">
+                            {topAgentsList.map((agent, idx) => {
+                                const wins = agent.stats?.wins || agent.wins || 0;
+                                const losses = agent.stats?.losses || agent.losses || 0;
+                                const wr = wins + losses > 0 ? ((wins / (wins + losses)) * 100).toFixed(1) : '0';
+                                const earnings = agent.stats?.totalEarnings || 0;
+                                return (
+                                    <div key={agent.id || idx} className="stats-leaderboard__item">
+                                        <span className="stats-leaderboard__rank">
+                                            {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`}
+                                        </span>
+                                        <span className="stats-leaderboard__avatar" style={{ color: agent.color }}>{agent.avatar || '⚔️'}</span>
+                                        <div className="stats-leaderboard__info">
+                                            <span className="stats-leaderboard__name" style={{ color: agent.color }}>{agent.name}</span>
+                                            <span className="stats-leaderboard__record">{wins}W / {losses}L ({wr}%)</span>
+                                        </div>
+                                        <div className="stats-leaderboard__earnings">
+                                            <Flame size={12} />
+                                            <span>{earnings > 0 ? earnings.toLocaleString() : '0'} MON</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* Recent Matches */}
+                {recentResults.length > 0 && (
+                    <div className="stats-recent glass-card" id="recent-matches">
+                        <h3 className="stats-recent__title text-display">
+                            <Swords size={18} style={{ color: 'var(--neon-pink)' }} />
+                            Recent Matches
+                        </h3>
+                        <div className="stats-recent__list">
+                            {recentResults.slice(0, 8).map((match, idx) => (
+                                <div key={match.matchId || idx} className="stats-recent__item">
+                                    <span className="stats-recent__winner" style={{ color: match.winner?.color || '#FFE93E' }}>
+                                        {match.winner?.avatar || '🏆'} {match.winner?.name || 'Unknown'}
+                                    </span>
+                                    <span className="stats-recent__vs">defeated</span>
+                                    <span className="stats-recent__loser" style={{ color: match.loser?.color || '#888' }}>
+                                        {match.loser?.name || 'Unknown'}
+                                    </span>
+                                    <span className="stats-recent__method">{match.method || 'Decision'}</span>
+                                    {match.totalBets > 0 && (
+                                        <span className="stats-recent__pool">{match.totalBets} MON</span>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Monad Network Info */}
                 <div className="stats-monad" id="monad-info">
@@ -59,7 +265,7 @@ export default function Stats() {
                             <span className="text-gradient">Powered by Monad</span>
                         </h2>
                         <p className="stats-monad__sub">
-                            Agent Clash Arena runs on the Monad Layer-1 blockchain — delivering extreme performance with full EVM compatibility
+                            Agent Clash Arena runs on Monad Layer-1 — extreme performance with full EVM compatibility
                         </p>
                     </div>
 
@@ -96,7 +302,7 @@ export default function Stats() {
                             <div className="stats-monad__info-item">
                                 <span className="stats-monad__info-label">Block Explorer</span>
                                 <a href={MONAD_CONFIG.blockExplorer} target="_blank" rel="noopener noreferrer" className="stats-monad__info-link">
-                                    MonadVision <ExternalLink size={10} />
+                                    MonadScan <ExternalLink size={10} />
                                 </a>
                             </div>
                         </div>
@@ -107,36 +313,60 @@ export default function Stats() {
                 <div className="stats-contracts glass-card" id="contracts-section">
                     <h3 className="stats-contracts__title text-display">
                         <Shield size={18} style={{ color: 'var(--neon-cyan)' }} />
-                        Smart Contracts
+                        Smart Contract
                     </h3>
                     <p className="stats-contracts__desc">
-                        All bets and rewards are managed by audited smart contracts on Monad.
+                        All bets and rewards are managed by a verified smart contract on Monad.
                         Every transaction is transparent and verifiable on-chain.
                     </p>
                     <div className="stats-contracts__list">
-                        {Object.entries(MONAD_CONFIG.contracts).map(([name, address]) => (
-                            <div key={name} className="stats-contracts__item">
-                                <span className="stats-contracts__name">{name}</span>
-                                <span className="stats-contracts__address">{address}</span>
-                            </div>
-                        ))}
+                        <div className="stats-contracts__item">
+                            <span className="stats-contracts__name">AgentClashBetting</span>
+                            <a
+                                href={`${MONAD_CONFIG.blockExplorer}/address/${CONTRACT_ADDRESS}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="stats-contracts__address-link"
+                            >
+                                {CONTRACT_ADDRESS.slice(0, 10)}...{CONTRACT_ADDRESS.slice(-8)}
+                                <ArrowUpRight size={10} />
+                            </a>
+                        </div>
                     </div>
+
+                    {contractStats && (
+                        <div className="stats-contracts__details">
+                            <div className="stats-contracts__detail-item">
+                                <span>Min Bet</span>
+                                <span>{contractStats.minBet} MON</span>
+                            </div>
+                            <div className="stats-contracts__detail-item">
+                                <span>Max Bet</span>
+                                <span>{contractStats.maxBet.toLocaleString()} MON</span>
+                            </div>
+                            <div className="stats-contracts__detail-item">
+                                <span>Platform Fee</span>
+                                <span>{contractStats.platformFeePercent}%</span>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="stats-contracts__reward">
                         <h4 className="text-display" style={{ fontSize: '0.75rem', color: 'var(--monad-purple-light)' }}>
                             Reward Distribution
                         </h4>
                         <div className="stats-contracts__reward-bars">
                             <div className="stats-contracts__reward-bar">
-                                <div className="stats-contracts__reward-fill" style={{ width: '85%', background: 'var(--gradient-success)' }} />
-                                <span className="stats-contracts__reward-label">85% Bettors</span>
+                                <div className="stats-contracts__reward-fill" style={{ width: '75%', background: 'var(--gradient-success)' }} />
+                                <span className="stats-contracts__reward-label">75% Bettors</span>
                             </div>
                             <div className="stats-contracts__reward-bar">
-                                <div className="stats-contracts__reward-fill" style={{ width: '10%', background: 'var(--gradient-primary)' }} />
-                                <span className="stats-contracts__reward-label">10% Agent</span>
+                                <div className="stats-contracts__reward-fill" style={{ width: '15%', background: 'var(--gradient-primary)' }} />
+                                <span className="stats-contracts__reward-label">15% Agent Owner</span>
                             </div>
                             <div className="stats-contracts__reward-bar">
-                                <div className="stats-contracts__reward-fill" style={{ width: '5%', background: 'var(--gradient-gold)' }} />
-                                <span className="stats-contracts__reward-label">5% Platform</span>
+                                <div className="stats-contracts__reward-fill" style={{ width: '10%', background: 'var(--gradient-gold)' }} />
+                                <span className="stats-contracts__reward-label">10% Platform</span>
                             </div>
                         </div>
                     </div>
