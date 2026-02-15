@@ -99,11 +99,18 @@ class ContractService {
         
         const matchBytes = this.matchIdToBytes32(matchId);
         const value = ethers.parseEther(amountMON);
-        
-        const tx = await this.contract.placeBet(matchBytes, side, {
-            value,
-            gasLimit: 200000,
-        });
+
+        // Gas usage on Monad can vary by state; fixed caps caused out-of-gas reverts in production.
+        let gasLimit;
+        try {
+            const estimatedGas = await this.contract.placeBet.estimateGas(matchBytes, side, { value });
+            gasLimit = (estimatedGas * 120n) / 100n; // +20% headroom
+        } catch {
+            // Fallback for nodes that fail estimation intermittently.
+            gasLimit = 500000n;
+        }
+
+        const tx = await this.contract.placeBet(matchBytes, side, { value, gasLimit });
         
         const receipt = await tx.wait();
         return {
