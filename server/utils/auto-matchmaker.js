@@ -55,8 +55,22 @@ const STRATEGY_AVATAR = {
     balanced: '⚖️',
 };
 
-// Match phases timing (milliseconds)
-const BETTING_DURATION = 30000;    // 30s betting window
+function parseDurationMs(value, fallback, min = 1000) {
+    const parsed = parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed) || parsed < min) return fallback;
+    return parsed;
+}
+
+function parseAmount(value, fallback, min = 0) {
+    const parsed = Number.parseFloat(String(value ?? ''));
+    if (!Number.isFinite(parsed) || parsed < min) return fallback;
+    return parsed;
+}
+
+// Match phases timing and pool gating
+const BETTING_DURATION = parseDurationMs(process.env.MATCH_BETTING_DURATION_MS, 120000); // 2m default
+const BETTING_EXTENSION_DURATION = parseDurationMs(process.env.MATCH_POOL_EXTENSION_MS, BETTING_DURATION);
+const MATCH_MIN_POOL_MON = parseAmount(process.env.MATCH_MIN_POOL_MON, 5000, 0);
 const FIGHT_DURATION = 195000;     // 195s fight (3 rounds × 60s + pauses + buffer)
 const RESULT_DURATION = 6000;      // 6s show result
 const COOLDOWN_DURATION = 3000;    // 3s between matches
@@ -159,8 +173,12 @@ class AutoMatchmaker {
         if (status === 'betting') {
             this.phase = 'BETTING';
             this.currentMatch.status = 'betting';
+            this.currentMatch.poolMinMON = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
+            this.currentMatch.poolTargetMet = Number(this.currentMatch.totalBets || 0) >= this.currentMatch.poolMinMON;
+            this.currentMatch.bettingDurationMs = Number(this.currentMatch.bettingDurationMs || BETTING_DURATION);
+            this.currentMatch.bettingExtensionMs = Number(this.currentMatch.bettingExtensionMs || BETTING_EXTENSION_DURATION);
             this.currentMatch.phaseStartedAt = toTimestamp(candidate.phaseStartedAt || candidate.createdAt || now);
-            this.currentMatch.phaseEndsAt = savedPhaseEnd > now ? savedPhaseEnd : (now + BETTING_DURATION);
+            this.currentMatch.phaseEndsAt = savedPhaseEnd > now ? savedPhaseEnd : (now + this.currentMatch.bettingDurationMs);
             this.bettingTimeLeft = Math.max(0, Math.ceil((this.currentMatch.phaseEndsAt - now) / 1000));
             this.io.emit('match:new', this.currentMatch);
             this.io.emit('match:phase', { phase: 'BETTING', match: this.currentMatch, timeLeft: this.bettingTimeLeft });
@@ -201,6 +219,11 @@ class AutoMatchmaker {
             hasRealAgent: !!match.hasRealAgent,
             onChain: !!match.onChain,
             onChainTxHash: match.onChainTxHash || null,
+            poolMinMON: Number(match.poolMinMON || MATCH_MIN_POOL_MON),
+            poolTargetMet: Number(match.totalBets || 0) >= Number(match.poolMinMON || MATCH_MIN_POOL_MON),
+            extensionCount: Number(match.extensionCount || 0),
+            bettingDurationMs: Number(match.bettingDurationMs || BETTING_DURATION),
+            bettingExtensionMs: Number(match.bettingExtensionMs || BETTING_EXTENSION_DURATION),
             phaseStartedAt: toTimestamp(match.phaseStartedAt || Date.now()),
             phaseEndsAt: toTimestamp(match.phaseEndsAt || Date.now()),
         };
@@ -215,14 +238,72 @@ class AutoMatchmaker {
             }
 
             const now = Date.now();
+            const requiredPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
             this.bettingTimeLeft = Math.max(0, Math.ceil((toTimestamp(this.currentMatch.phaseEndsAt) - now) / 1000));
-            this.io.emit('match:timer', { timeLeft: this.bettingTimeLeft });
+            this.io.emit('match:timer', {
+                timeLeft: this.bettingTimeLeft,
+                currentPool: Number(this.currentMatch.totalBets || 0),
+                minPool: requiredPool,
+            });
 
             if (this.bettingTimeLeft <= 0) {
-                clearInterval(this.bettingInterval);
-                this._startFight();
+                const currentPool = Number(this.currentMatch.totalBets || 0);
+                if (currentPool >= requiredPool) {
+                    clearInterval(this.bettingInterval);
+                    this.currentMatch.poolTargetMet = true;
+                    this._startFight();
+                    return;
+                }
+
+                this._extendBettingWindow(currentPool, requiredPool);
             }
         }, 1000);
+    }
+
+    _extendBettingWindow(currentPool, requiredPool) {
+        if (!this.currentMatch || this.phase !== 'BETTING') return;
+
+        const now = Date.now();
+        const extensionMs = Number(this.currentMatch.bettingExtensionMs || BETTING_EXTENSION_DURATION);
+        this.currentMatch.status = 'betting';
+        this.currentMatch.phaseStartedAt = now;
+        this.currentMatch.phaseEndsAt = now + extensionMs;
+        this.currentMatch.extensionCount = Number(this.currentMatch.extensionCount || 0) + 1;
+        this.currentMatch.poolTargetMet = false;
+        this.bettingTimeLeft = Math.ceil(extensionMs / 1000);
+        this._persistCurrentMatch();
+
+        const missing = Math.max(0, requiredPool - currentPool);
+        const extensionText = `Pool ${currentPool.toFixed(2)} / ${requiredPool.toFixed(2)} MON. Extending betting by ${Math.ceil(extensionMs / 1000)}s. Need ${missing.toFixed(2)} MON more.`;
+
+        this.io.emit('match:update', this.currentMatch);
+        this.io.emit('match:timer', {
+            timeLeft: this.bettingTimeLeft,
+            currentPool,
+            minPool: requiredPool,
+        });
+        this.io.emit('arena:live_event', {
+            type: 'pool_extension',
+            icon: '⏳',
+            text: extensionText,
+            color: '#FFE93E',
+            timestamp: now,
+        });
+
+        Promise.resolve(db.addActivity({
+            type: 'pool_extension',
+            message: extensionText,
+            time: now,
+            icon: '⏳',
+        })).catch((err) => logger.warn('[AutoMatchmaker] Could not persist pool extension activity', { error: err.message }));
+
+        logger.info('[AutoMatchmaker] Betting window extended due to insufficient pool', {
+            matchId: this.currentMatch.id,
+            requiredPool,
+            currentPool,
+            extensionCount: this.currentMatch.extensionCount,
+            extensionMs,
+        });
     }
 
     async _persistCurrentMatch() {
@@ -267,12 +348,17 @@ class AutoMatchmaker {
     }
 
     getLiveMetrics() {
+        const requiredPool = Number(this.currentMatch?.poolMinMON || MATCH_MIN_POOL_MON);
+        const activePool = Number(this.currentMatch?.totalBets || 0);
         return {
             phase: this.phase,
-            activeBetsPool: Number(this.currentMatch?.totalBets || 0),
+            activeBetsPool: activePool,
             bettingTimeLeft: this.bettingTimeLeft,
             currentMatchId: this.currentMatch?.id || null,
             onChainLiveMatch: !!this.currentMatch?.onChain,
+            minPoolMON: requiredPool,
+            poolRemainingMON: Math.max(0, requiredPool - activePool),
+            poolReady: activePool >= requiredPool,
             recentResults: this.matchHistory.slice(0, 10),
         };
     }
@@ -352,6 +438,11 @@ class AutoMatchmaker {
             hasRealAgent,
             onChain: false,
             onChainTxHash: null,
+            poolMinMON: MATCH_MIN_POOL_MON,
+            poolTargetMet: false,
+            extensionCount: 0,
+            bettingDurationMs: BETTING_DURATION,
+            bettingExtensionMs: BETTING_EXTENSION_DURATION,
             phaseStartedAt: Date.now(),
             phaseEndsAt: Date.now() + BETTING_DURATION,
         };
@@ -379,27 +470,27 @@ class AutoMatchmaker {
 
         // Start BETTING phase
         this.phase = 'BETTING';
-        this.bettingTimeLeft = Math.ceil(BETTING_DURATION / 1000);
+        this.bettingTimeLeft = Math.ceil(this.currentMatch.bettingDurationMs / 1000);
 
         this.io.emit('match:new', this.currentMatch);
         this.io.emit('match:phase', { phase: 'BETTING', match: this.currentMatch, timeLeft: this.bettingTimeLeft });
         this.io.emit('arena:live_event', {
             type: 'match_start',
             icon: 'âš”ï¸',
-            text: `${agent1.name} vs ${agent2.name} started (${hasRealAgent ? 'REAL' : 'SIM'})`,
+            text: `${agent1.name} vs ${agent2.name} pool opened. Min ${MATCH_MIN_POOL_MON} MON (${hasRealAgent ? 'REAL' : 'SIM'})`,
             color: '#00F5FF',
             timestamp: Date.now(),
         });
 
         Promise.resolve(db.addActivity({
             type: 'match_start',
-            message: `${agent1.name} vs ${agent2.name} started (${hasRealAgent ? 'REAL' : 'SIM'})`,
+            message: `${agent1.name} vs ${agent2.name} pool opened. Min ${MATCH_MIN_POOL_MON} MON (${hasRealAgent ? 'REAL' : 'SIM'})`,
             time: Date.now(),
             icon: 'âš”ï¸',
         })).catch((err) => logger.warn('[AutoMatchmaker] Could not persist match_start activity', { error: err.message }));
 
         const realLabel = hasRealAgent ? ' [REAL AGENTS]' : ' [SIM]';
-        logger.info(`[AutoMatchmaker] New match: ${agent1.name} vs ${agent2.name} (${matchId})${realLabel}`);
+        logger.info(`[AutoMatchmaker] New match: ${agent1.name} vs ${agent2.name} (${matchId})${realLabel} | minPool=${MATCH_MIN_POOL_MON} MON | bettingWindow=${Math.ceil(BETTING_DURATION / 1000)}s`);
 
         // Countdown timer
         this._startBettingCountdown();
@@ -407,9 +498,16 @@ class AutoMatchmaker {
 
     _startFight({ restored = false } = {}) {
         if (!this.currentMatch) return;
+        const requiredPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
+        const currentPool = Number(this.currentMatch.totalBets || 0);
+        if (!restored && currentPool < requiredPool) {
+            this._extendBettingWindow(currentPool, requiredPool);
+            return;
+        }
 
         this.phase = 'FIGHTING';
         this.currentMatch.status = 'fighting';
+        this.currentMatch.poolTargetMet = currentPool >= requiredPool;
         const now = Date.now();
         const fallbackEnd = now + FIGHT_DURATION;
         this.currentMatch.phaseStartedAt = restored ? toTimestamp(this.currentMatch.phaseStartedAt || now) : now;
@@ -801,6 +899,9 @@ class AutoMatchmaker {
             this.currentMatch.agent2Bets += bet.amount;
         }
         this.currentMatch.totalBets = this.currentMatch.agent1Bets + this.currentMatch.agent2Bets;
+        const requiredPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
+        const wasPoolReady = !!this.currentMatch.poolTargetMet;
+        this.currentMatch.poolTargetMet = this.currentMatch.totalBets >= requiredPool;
 
         // Recalculate odds
         const total = this.currentMatch.totalBets;
@@ -819,6 +920,42 @@ class AutoMatchmaker {
             color: '#FFE93E',
             timestamp: Date.now(),
         });
+
+        if (!wasPoolReady && this.currentMatch.poolTargetMet) {
+            const now = Date.now();
+            const poolText = `Minimum pool reached (${this.currentMatch.totalBets.toFixed(2)} / ${requiredPool.toFixed(2)} MON). Match can now start.`;
+            this.io.emit('arena:live_event', {
+                type: 'pool_ready',
+                icon: '✅',
+                text: poolText,
+                color: '#2ECC71',
+                timestamp: now,
+            });
+
+            if (typeof db.addActivity === 'function') {
+                Promise.resolve(db.addActivity({
+                    type: 'pool_ready',
+                    message: poolText,
+                    time: now,
+                    icon: '✅',
+                })).catch((err) => logger.warn('[AutoMatchmaker] Failed to persist pool_ready activity', { error: err.message }));
+            }
+        }
+
+        if (!wasPoolReady && this.currentMatch.poolTargetMet && Number(this.currentMatch.extensionCount || 0) > 0 && this.phase === 'BETTING') {
+            clearInterval(this.bettingInterval);
+            this.bettingTimeLeft = 0;
+            this.io.emit('match:timer', {
+                timeLeft: 0,
+                currentPool: Number(this.currentMatch.totalBets || 0),
+                minPool: requiredPool,
+            });
+            setTimeout(() => {
+                if (!this.currentMatch || this.phase !== 'BETTING') return;
+                if (Number(this.currentMatch.totalBets || 0) < requiredPool) return;
+                this._startFight();
+            }, 500);
+        }
 
         if (typeof db.addBet === 'function') {
             Promise.resolve(db.addBet({

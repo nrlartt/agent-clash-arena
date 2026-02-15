@@ -43,6 +43,9 @@ export default function Arena() {
         totalBetsToday: 0,
         matchesPlayedToday: 0,
         activeBetsPool: 0,
+        minPoolMON: 0,
+        poolRemainingMON: 0,
+        poolReady: false,
     });
     const [activityFeed, setActivityFeed] = useState([]);
     const [recentResults, setRecentResults] = useState([]);

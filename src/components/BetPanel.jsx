@@ -82,6 +82,9 @@ export default function BetPanel({
     if (!match) return null;
 
     const { agent1, agent2, agent1Bets, agent2Bets, totalBets, agent1Odds, agent2Odds } = match;
+    const poolMinMON = Number(match.poolMinMON || 0);
+    const poolMissingMON = Math.max(0, poolMinMON - Number(totalBets || 0));
+    const poolReady = poolMinMON <= 0 || poolMissingMON <= 0;
 
     const agent1Pct = totalBets > 0 ? (agent1Bets / totalBets * 100).toFixed(1) : 50;
     const agent2Pct = totalBets > 0 ? (agent2Bets / totalBets * 100).toFixed(1) : 50;
@@ -236,6 +239,13 @@ export default function BetPanel({
                     </div>
                     <span className="bet-panel__pct" style={{ color: agent2.color }}>{agent2Pct}%</span>
                 </div>
+                {poolMinMON > 0 && (
+                    <div className="bet-panel__pool-threshold">
+                        {poolReady
+                            ? `Pool ready: ${totalBets.toLocaleString()} / ${poolMinMON.toLocaleString()} MON`
+                            : `Min pool: ${poolMinMON.toLocaleString()} MON | Remaining: ${poolMissingMON.toLocaleString()} MON`}
+                    </div>
+                )}
             </div>
 
             {/* Fighter Selection — Corner Buttons */}

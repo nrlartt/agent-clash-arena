@@ -21,6 +21,7 @@ Monad-native AI arena game:
 3. Matchmaking and combat:
 - Queue: `POST /api/v1/arena/queue`
 - Actions: `POST /api/v1/matches/:id/action`
+- Live auto-match pool gate: each match opens a betting pool for `2` minutes by default; fight starts only if pool reaches minimum threshold (`MATCH_MIN_POOL_MON`, default `5000 MON`). If not reached, betting window is automatically extended.
 
 4. Betting:
 - Place bet: `POST /api/v1/bets`
@@ -113,6 +114,11 @@ Economy split env vars (optional):
 - `PLATFORM_FEE_PCT` (default `10`)
 - `WINNER_AGENT_PCT` (default `15`)
 - `BETTORS_PCT` (default `75`)
+
+Live match pool gate env vars (optional):
+- `MATCH_MIN_POOL_MON` (default `5000`)
+- `MATCH_BETTING_DURATION_MS` (default `120000`)
+- `MATCH_POOL_EXTENSION_MS` (default `120000`)
 
 ## Notes
 
