@@ -124,13 +124,17 @@ router.post('/register', async (req, res) => {
 
     await db.addAgent(agent);
 
-    // Activity feed
-    await db.addActivity({
-        type: 'registration',
-        message: `${name} just registered! Awaiting human claim...`,
-        time: Date.now(),
-        icon: '🆕',
-    });
+    // Activity feed (non-blocking)
+    try {
+        await db.addActivity({
+            type: 'registration',
+            message: `${name} just registered! Awaiting human claim...`,
+            time: Date.now(),
+            icon: '🆕',
+        });
+    } catch (actErr) {
+        console.error('[Register] Activity log failed:', actErr.message);
+    }
 
     // Return response (without internal fields)
     res.status(201).json({
@@ -343,20 +347,29 @@ router.post('/claim', async (req, res) => {
         },
     });
 
-    await db.addActivity({
-        type: 'claim',
-        message: `${agent.name} was claimed by ${twitter_handle ? '@' + twitter_handle : wallet_address.slice(0, 6) + '...' + wallet_address.slice(-4)} with ${budgetAmount} MON budget`,
-        time: Date.now(),
-        icon: '🤝',
-    });
+    // Non-blocking: don't let activity/socket errors block the claim response
+    try {
+        await db.addActivity({
+            type: 'claim',
+            message: `${agent.name} was claimed by ${twitter_handle ? '@' + twitter_handle : wallet_address.slice(0, 6) + '...' + wallet_address.slice(-4)} with ${budgetAmount} MON budget`,
+            time: Date.now(),
+            icon: '🤝',
+        });
+    } catch (actErr) {
+        console.error('[Claim] Activity log failed:', actErr.message);
+    }
 
     // Emit WebSocket event
-    if (req.io) {
-        req.io.emit('agent:claimed', {
-            agentId: agentDbId,
-            agentName: agent.name,
-            owner: wallet_address.slice(0, 6) + '...' + wallet_address.slice(-4),
-        });
+    try {
+        if (req.io) {
+            req.io.emit('agent:claimed', {
+                agentId: agentDbId,
+                agentName: agent.name,
+                owner: wallet_address.slice(0, 6) + '...' + wallet_address.slice(-4),
+            });
+        }
+    } catch (wsErr) {
+        console.error('[Claim] WebSocket emit failed:', wsErr.message);
     }
 
     res.json({

@@ -84,12 +84,16 @@ router.get('/heartbeat', authAgent, async (req, res) => {
         a => a.message && a.message.includes(agent.name)
     );
 
-    await db.addActivity({
-        type: 'heartbeat',
-        message: `${agent.name} heartbeat received — ready for matches`,
-        time: Date.now(),
-        icon: '💓',
-    });
+    try {
+        await db.addActivity({
+            type: 'heartbeat',
+            message: `${agent.name} heartbeat received — ready for matches`,
+            time: Date.now(),
+            icon: '💓',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     res.json({
         success: true,
@@ -185,12 +189,16 @@ router.post('/queue', authAgent, async (req, res) => {
 
     await db.updateAgent(agent._id || agent.id, { status: 'in_queue' });
 
-    await db.addActivity({
-        type: 'queue',
-        message: `${agent.name} joined ${mode || 'ranked'} matchmaking queue`,
-        time: Date.now(),
-        icon: '📋',
-    });
+    try {
+        await db.addActivity({
+            type: 'queue',
+            message: `${agent.name} joined ${mode || 'ranked'} matchmaking queue`,
+            time: Date.now(),
+            icon: '📋',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     // Try to match immediately
     const match = await tryMatchmaking(req.io);
@@ -241,12 +249,16 @@ router.post('/challenge', authAgent, async (req, res) => {
     // Create the match
     const match = await createMatch(req.agent, target, 'challenge', req.io);
 
-    await db.addActivity({
-        type: 'challenge',
-        message: `${req.agent.name} challenged ${target.name} to a duel!`,
-        time: Date.now(),
-        icon: '🎯',
-    });
+    try {
+        await db.addActivity({
+            type: 'challenge',
+            message: `${req.agent.name} challenged ${target.name} to a duel!`,
+            time: Date.now(),
+            icon: '🎯',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     res.json({
         success: true,
@@ -352,12 +364,16 @@ router.post('/tournament/start', requireAdmin, async (_req, res) => {
         }],
     };
 
-    await db.addActivity({
-        type: 'tournament',
-        message: `Tournament ${tournamentId} started with ${participants.length} agents`,
-        time: Date.now(),
-        icon: '🏆',
-    });
+    try {
+        await db.addActivity({
+            type: 'tournament',
+            message: `Tournament ${tournamentId} started with ${participants.length} agents`,
+            time: Date.now(),
+            icon: '🏆',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     if (_req.io) {
         _req.io.emit('tournament:start', {
@@ -428,12 +444,16 @@ async function createMatch(agent1, agent2, mode, io) {
     await db.updateAgent(agent1._id || agent1.id, { status: 'in_match' });
     await db.updateAgent(agent2._id || agent2.id, { status: 'in_match' });
 
-    await db.addActivity({
-        type: 'match_start',
-        message: `${agent1.name} vs ${agent2.name} — FIGHT!`,
-        time: Date.now(),
-        icon: '⚔️',
-    });
+    try {
+        await db.addActivity({
+            type: 'match_start',
+            message: `${agent1.name} vs ${agent2.name} — FIGHT!`,
+            time: Date.now(),
+            icon: '⚔️',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     // Create match on-chain (async, non-blocking)
     blockchain.createMatchOnChain(matchId, agent1.name, agent2.name).catch(err => {
@@ -600,12 +620,16 @@ async function endMatch(matchId, io) {
     // Remove from active matches
     await db.removeMatch(matchId);
 
-    await db.addActivity({
-        type: 'match_end',
-        message: `${winnerName} defeats ${loserName}! Agent +${winnerReward} MON, Bettors +${bettorsDistribution.totalPayout.toFixed(2)} MON`,
-        time: Date.now(),
-        icon: '🏆',
-    });
+    try {
+        await db.addActivity({
+            type: 'match_end',
+            message: `${winnerName} defeats ${loserName}! Agent +${winnerReward} MON, Bettors +${bettorsDistribution.totalPayout.toFixed(2)} MON`,
+            time: Date.now(),
+            icon: '🏆',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     // Resolve match on-chain and send reward (async, non-blocking)
     (async () => {
@@ -660,12 +684,16 @@ async function maybeAdvanceTournament(matchId, winnerId, io) {
         tournamentState.active = false;
         tournamentState.champion = current.winners[0];
         const champAgent = await db.getAgentById(current.winners[0]);
-        await db.addActivity({
-            type: 'tournament',
-            message: `Tournament ${tournamentState.id} ended. Champion: ${champAgent?.name || current.winners[0]}`,
-            time: Date.now(),
-            icon: '🏅',
-        });
+        try {
+            await db.addActivity({
+                type: 'tournament',
+                message: `Tournament ${tournamentState.id} ended. Champion: ${champAgent?.name || current.winners[0]}`,
+                time: Date.now(),
+                icon: '🏅',
+            });
+        } catch (actErr) {
+            console.error('[Arena] Activity log failed:', actErr.message);
+        }
         if (io) {
             io.emit('tournament:end', {
                 id: tournamentState.id,
@@ -686,12 +714,16 @@ async function maybeAdvanceTournament(matchId, winnerId, io) {
         winners: [],
     });
 
-    await db.addActivity({
-        type: 'tournament',
-        message: `Tournament ${tournamentState.id} advanced to round ${nextRound}`,
-        time: Date.now(),
-        icon: '🎯',
-    });
+    try {
+        await db.addActivity({
+            type: 'tournament',
+            message: `Tournament ${tournamentState.id} advanced to round ${nextRound}`,
+            time: Date.now(),
+            icon: '🎯',
+        });
+    } catch (actErr) {
+        console.error('[Arena] Activity log failed:', actErr.message);
+    }
 
     if (io) {
         io.emit('tournament:round', {

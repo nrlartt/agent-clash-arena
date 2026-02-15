@@ -113,12 +113,16 @@ router.post('/', async (req, res) => {
 
     await db.updateMatch(match_id, updates);
 
-    await db.addActivity({
-        type: 'bet',
-        message: `${wallet_address.slice(0, 6)}...${wallet_address.slice(-4)} bet ${betAmount} MON on ${agent_id === match.agent1Id ? match.agent1Name : match.agent2Name}`,
-        time: Date.now(),
-        icon: '💰',
-    });
+    try {
+        await db.addActivity({
+            type: 'bet',
+            message: `${wallet_address.slice(0, 6)}...${wallet_address.slice(-4)} bet ${betAmount} MON on ${agent_id === match.agent1Id ? match.agent1Name : match.agent2Name}`,
+            time: Date.now(),
+            icon: '💰',
+        });
+    } catch (actErr) {
+        console.error('[Bets] Activity log failed:', actErr.message);
+    }
 
     // Emit via WebSocket
     if (req.io) {

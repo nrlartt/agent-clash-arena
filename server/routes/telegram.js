@@ -95,12 +95,16 @@ async function registerAgentFromTelegram({ username, firstName, chatId }) {
     const walletKeyPackage = exportAgentWalletKeyPackage(agent, walletSecret);
 
     await db.addAgent(agent);
-    await db.addActivity({
-        type: 'registration',
-        message: `${name} registered via Telegram command. Awaiting claim.`,
-        time: Date.now(),
-        icon: '📲',
-    });
+    try {
+        await db.addActivity({
+            type: 'registration',
+            message: `${name} registered via Telegram command. Awaiting claim.`,
+            time: Date.now(),
+            icon: '📲',
+        });
+    } catch (actErr) {
+        console.error('[Telegram] Activity log failed:', actErr.message);
+    }
 
     return {
         duplicate: false,
