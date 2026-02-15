@@ -16,6 +16,7 @@ export default function GameCanvas({
     agent1Equipment,
     agent2Equipment,
     showRoundHud = false,
+    serverFightState = null,
 }) {
     const canvasRef = useRef(null);
     const engineRef = useRef(null);
@@ -27,12 +28,14 @@ export default function GameCanvas({
     const agent2Ref = useRef(agent2);
     const isPlayingRef = useRef(isPlaying);
     const showRoundHudRef = useRef(showRoundHud);
+    const serverFightStateRef = useRef(serverFightState);
 
     useEffect(() => { onStateUpdateRef.current = onStateUpdate; }, [onStateUpdate]);
     useEffect(() => { onMatchEndRef.current = onMatchEnd; }, [onMatchEnd]);
     useEffect(() => { agent1Ref.current = agent1; }, [agent1]);
     useEffect(() => { agent2Ref.current = agent2; }, [agent2]);
     useEffect(() => { showRoundHudRef.current = showRoundHud; }, [showRoundHud]);
+    useEffect(() => { serverFightStateRef.current = serverFightState; }, [serverFightState]);
 
     // When backend says match is over, pause engine
     useEffect(() => {
@@ -795,6 +798,11 @@ export default function GameCanvas({
                     // Use real delta for smoother animation
                     const delta = Math.min(timestamp - lastFrameTime, 33.33); // Cap at ~30fps minimum
                     lastFrameTime = timestamp;
+
+                    // Sync server-authoritative state into engine
+                    if (serverFightStateRef.current && isPlayingRef.current) {
+                        engine.syncServerState(serverFightStateRef.current);
+                    }
 
                     // Only update engine if match is still playing
                     if (isPlayingRef.current && !engine.isPaused) {

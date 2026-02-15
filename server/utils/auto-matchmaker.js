@@ -11,6 +11,7 @@ const logger = require('./logger');
 const blockchain = require('./blockchain');
 const db = require('../db');
 const { generateAgentEquipment } = require('../data/shop-items');
+const FightSimulator = require('./fight-simulator');
 
 // Simulation agents (used ONLY when not enough real agents)
 const SIM_AGENTS = [
@@ -73,7 +74,7 @@ const BETTING_EXTENSION_DURATION = parseDurationMs(process.env.MATCH_POOL_EXTENS
 const MATCH_MIN_POOL_MON = parseAmount(process.env.MATCH_MIN_POOL_MON, 100, 0);
 const WAITING_RETRY_MS = parseDurationMs(process.env.MATCH_WAITING_RETRY_MS, 10000, 1000);
 const POOL_READY_START_DELAY_MS = parseDurationMs(process.env.MATCH_POOL_READY_DELAY_MS, 2000, 250);
-const FIGHT_DURATION = 195000;     // 195s fight (3 rounds × 60s + pauses + buffer)
+const FIGHT_DURATION = 210000;     // 210s safety bound (3 × 60s rounds + pauses + buffer)
 const RESULT_DURATION = 6000;      // 6s show result
 const COOLDOWN_DURATION = 3000;    // 3s between matches
 
@@ -95,6 +96,7 @@ class AutoMatchmaker {
         this.waitingReason = null;
         this.waitingMessage = null;
         this._fightStartPending = false;
+        this.fightSimulator = null;
         this.matchHistory = [];
         this._realAgentsCache = [];
         this._lastAgentFetch = 0;
@@ -124,6 +126,7 @@ class AutoMatchmaker {
     stop() {
         clearTimeout(this.phaseTimer);
         clearInterval(this.bettingInterval);
+        if (this.fightSimulator) { this.fightSimulator.stop(); this.fightSimulator = null; }
         this.phase = 'IDLE';
         logger.info('[AutoMatchmaker] Stopped');
     }
@@ -131,6 +134,7 @@ class AutoMatchmaker {
     forceReset(reason = 'NO_REAL_AGENTS', message = 'Arena reset completed. Waiting for new registrations.') {
         clearTimeout(this.phaseTimer);
         clearInterval(this.bettingInterval);
+        if (this.fightSimulator) { this.fightSimulator.stop(); this.fightSimulator = null; }
 
         this._fightStartPending = false;
         this.currentMatch = null;
@@ -176,6 +180,7 @@ class AutoMatchmaker {
             waitingReason: this.waitingReason,
             waitingMessage: this.waitingMessage,
             matchHistory: this.matchHistory.slice(0, 10),
+            fightTick: this.fightSimulator ? this.fightSimulator.getLastTick() : null,
         };
     }
 
@@ -693,35 +698,51 @@ class AutoMatchmaker {
         });
         if (!restored) this.io.emit('arena:live_event', {
             type: 'fight_start',
-            icon: 'ðŸ¥Š',
+            icon: '🥊',
             text: `Fight started: ${this.currentMatch.agent1.name} vs ${this.currentMatch.agent2.name}`,
             color: '#FF6B35',
             timestamp: Date.now(),
         });
 
-        // Simulate fight events during the fight
-        const fightEvents = restored ? [] : this._generateFightEvents();
-        fightEvents.forEach((event) => {
-            setTimeout(() => {
-                try {
-                    this.io.emit('match:fight_event', event);
-                } catch { /* ignore */ }
-            }, event.delay);
+        // ── Server-authoritative fight simulation ──
+        // Clean up any previous simulator
+        if (this.fightSimulator) { this.fightSimulator.stop(); this.fightSimulator = null; }
+
+        this.fightSimulator = new FightSimulator({
+            agent1: this.currentMatch.agent1,
+            agent2: this.currentMatch.agent2,
+            io: this.io,
+            matchId: this.currentMatch.id,
+            onEnd: (simResult) => {
+                this.fightSimulator = null;
+                clearTimeout(this.phaseTimer);
+                this._endFight(simResult).catch(err => {
+                    logger.error('[AutoMatchmaker] _endFight crashed, forcing next match', { error: err.message });
+                    this._scheduleNextMatch();
+                });
+            },
         });
 
-        // End fight after duration
-        const remaining = Math.max(1000, this.currentMatch.phaseEndsAt - now);
+        if (!restored) {
+            this.fightSimulator.start();
+        } else {
+            // Restored fights start immediately (may be partially through)
+            this.fightSimulator.start();
+        }
+
+        // Safety timeout: if simulator hasn't finished within FIGHT_DURATION, force-end it
         this.phaseTimer = setTimeout(() => {
-            this._endFight().catch(err => {
-                logger.error('[AutoMatchmaker] _endFight crashed, forcing next match', { error: err.message });
-                this._scheduleNextMatch();
-            });
-        }, remaining);
+            if (this.fightSimulator) {
+                logger.warn('[AutoMatchmaker] Fight safety timeout reached, force-ending simulator');
+                this.fightSimulator.forceEnd();
+            }
+        }, FIGHT_DURATION);
     }
 
     _scheduleNextMatch() {
         clearTimeout(this.phaseTimer);
         clearInterval(this.bettingInterval);
+        if (this.fightSimulator) { this.fightSimulator.stop(); this.fightSimulator = null; }
         this._fightStartPending = false;
         this.waitingReason = null;
         this.waitingMessage = null;
@@ -734,34 +755,16 @@ class AutoMatchmaker {
         }, COOLDOWN_DURATION);
     }
 
-    async _endFight() {
+    async _endFight(simulatorResult) {
         const a1 = this.currentMatch.agent1;
         const a2 = this.currentMatch.agent2;
 
-        // Determine winner based on power rating + randomness
-        let a1Score = a1.powerRating + Math.random() * 40;
-        let a2Score = a2.powerRating + Math.random() * 40;
-
-        // Strategy modifiers
-        if (a1.strategy === 'aggressive') a1Score += 5;
-        if (a1.strategy === 'defensive') a1Score += 3;
-        if (a2.strategy === 'aggressive') a2Score += 5;
-        if (a2.strategy === 'defensive') a2Score += 3;
-
-        // Equipment bonuses
-        const eb1 = a1.equipmentBonus || {};
-        const eb2 = a2.equipmentBonus || {};
-        a1Score += (eb1.damage || 0) * 0.4 + (eb1.critChance || 0) * 0.3 + (eb1.lifesteal || 0) * 0.2;
-        a2Score += (eb2.damage || 0) * 0.4 + (eb2.critChance || 0) * 0.3 + (eb2.lifesteal || 0) * 0.2;
-        a1Score += (eb1.defense || 0) * 0.3 + (eb1.maxHP || 0) * 0.05 + (eb1.dodgeChance || 0) * 0.25;
-        a2Score += (eb2.defense || 0) * 0.3 + (eb2.maxHP || 0) * 0.05 + (eb2.dodgeChance || 0) * 0.25;
-        a1Score += (eb1.speed || 0) * 0.15 + (eb1.attackSpeed || 0) * 0.1;
-        a2Score += (eb2.speed || 0) * 0.15 + (eb2.attackSpeed || 0) * 0.1;
-
-        const winnerId = a1Score >= a2Score ? '1' : '2';
+        // Use server-authoritative fight result from FightSimulator
+        const winnerId = simulatorResult?.winnerId || '1';
         const winner = winnerId === '1' ? a1 : a2;
         const loser = winnerId === '1' ? a2 : a1;
-        const method = 'Decision';
+        const method = simulatorResult?.method || 'Decision';
+        const fightDuration = simulatorResult?.duration || Math.floor(FIGHT_DURATION / 1000);
 
         const monEarned = Math.floor(this.currentMatch.totalBets * 0.75) || Math.floor(Math.random() * 500 + 100);
 
@@ -771,11 +774,12 @@ class AutoMatchmaker {
             winner: { name: winner.name, avatar: winner.avatar, color: winner.color, isReal: !!winner.isReal },
             loser: { name: loser.name, avatar: loser.avatar, color: loser.color, isReal: !!loser.isReal },
             method,
-            duration: Math.floor(FIGHT_DURATION / 1000),
+            duration: fightDuration,
             monEarned,
             totalBets: this.currentMatch.totalBets,
             timestamp: Date.now(),
             hasRealAgent: this.currentMatch.hasRealAgent,
+            fightStats: simulatorResult?.fighters || null,
         };
 
         try {
@@ -788,7 +792,7 @@ class AutoMatchmaker {
                 winnerName: winner.name,
                 loserName: loser.name,
                 method,
-                duration: result.duration,
+                duration: fightDuration,
                 monEarned,
                 totalBets: this.currentMatch.totalBets,
                 timestamp: Date.now(),
@@ -983,37 +987,7 @@ class AutoMatchmaker {
         };
     }
 
-    _generateFightEvents() {
-        const events = [];
-        const a1 = this.currentMatch.agent1;
-        const a2 = this.currentMatch.agent2;
-        const count = 8 + Math.floor(Math.random() * 6);
-
-        for (let i = 0; i < count; i++) {
-            const attacker = Math.random() > 0.5 ? a1 : a2;
-            const defender = attacker === a1 ? a2 : a1;
-            const damage = Math.floor(Math.random() * 25 + 5);
-            const types = ['hit', 'critical', 'combo', 'dodge', 'special', 'block'];
-            const type = types[Math.floor(Math.random() * types.length)];
-            const icons = { hit: '👊', critical: '💥', combo: '⚡', dodge: '💨', special: '🌟', block: '🛡️' };
-
-            events.push({
-                type,
-                icon: icons[type],
-                attacker: attacker.name,
-                defender: defender.name,
-                damage: type === 'dodge' || type === 'block' ? 0 : damage,
-                text: type === 'dodge'
-                    ? `${defender.name} dodged ${attacker.name}'s attack!`
-                    : type === 'block'
-                    ? `${defender.name} blocked! No damage.`
-                    : `${attacker.name} ${type === 'critical' ? 'CRITICAL HIT' : type === 'combo' ? 'COMBO' : type === 'special' ? 'SPECIAL MOVE' : 'hit'} ${defender.name} for ${damage} DMG!`,
-                delay: Math.floor((i / count) * FIGHT_DURATION * 0.9) + Math.floor(Math.random() * 2000),
-            });
-        }
-
-        return events.sort((a, b) => a.delay - b.delay);
-    }
+    // _generateFightEvents removed — replaced by FightSimulator server-authoritative events
 
     async recordBet(side, amount, address, meta = {}) {
         if (!this.currentMatch || this.phase !== 'BETTING') return null;

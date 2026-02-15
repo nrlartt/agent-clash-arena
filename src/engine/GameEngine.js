@@ -47,6 +47,12 @@ export class GameEngine {
 
         this.momentum = { '1': 0, '2': 0 };
 
+        // Server-authoritative mode: when true, HP/rounds/finish
+        // are controlled by server fight ticks. Local engine only
+        // handles visuals (movement, particles, animations).
+        this.serverDriven = false;
+        this._lastServerRound = 1;
+
         // Callbacks
         this.onHit = null;
         this.onUpdate = null;
@@ -561,76 +567,65 @@ export class GameEngine {
                     continue;
                 }
 
-                // ── Damage calc (v3 — balanced: visible but KO is rare) ──
+                // ── Damage calc (for visual effects; HP only changes locally when not server-driven) ──
                 let dmg = 10 + wSpeed * 2.8 + Math.random() * 8;
-                dmg += attacker.bonusDamage * 0.7; // Equipment damage scaled down
+                dmg += attacker.bonusDamage * 0.7;
 
-                // Berserker — more powerful at low HP
                 if (attacker.lowHPBonus > 0 && attacker.hp / attacker.maxHp < 0.3) {
                     dmg *= 1 + attacker.lowHPBonus / 100;
                 }
 
-                // Momentum — snowball slightly
                 dmg *= 1 + (this.momentum[id] || 0) * 0.02;
 
-                // Crit — impactful crits
                 let isCrit = false;
                 if (Math.random() * 100 < attacker.critChance) {
                     dmg *= attacker.critDamage / 100;
                     isCrit = true;
-                    attacker.critHits++;
                 }
 
-                // Defense — capped at 40% reduction max to keep fights exciting
                 const effDef = Math.max(0, other.defense - attacker.armorPen);
                 dmg *= 1 - Math.min(0.4, effDef / (effDef + 60));
 
                 const damage = Math.round(Math.max(2, dmg));
-                other.hp = Math.max(1, other.hp - damage); // Never drop to 0 — no KO
+
+                // Only mutate game state locally when NOT server-driven
+                if (!this.serverDriven) {
+                    other.hp = Math.max(1, other.hp - damage);
+                    attacker.score += damage;
+                    attacker.hitsLanded++;
+                    other.hitsTaken++;
+                    if (isCrit) attacker.critHits++;
+
+                    this.momentum[id] = Math.min(8, (this.momentum[id] || 0) + 1);
+                    this.momentum[otherId] = Math.max(0, (this.momentum[otherId] || 0) - 0.5);
+
+                    if (this.gameTime - attacker.lastHitTime < attacker.comboWindowMs) {
+                        attacker.combo++;
+                        if (attacker.combo > attacker.maxCombo) attacker.maxCombo = attacker.combo;
+                    } else {
+                        attacker.combo = 1;
+                    }
+                    attacker.lastHitTime = this.gameTime;
+
+                    attacker.specialMeter = Math.min(100, attacker.specialMeter + 10 + (isCrit ? 15 : 0) + (attacker.combo >= 3 ? 8 : 0));
+                    if (attacker.specialMeter >= 100 && !attacker.specialReady) {
+                        attacker.specialReady = true;
+                        this.comboEffects.push({
+                            x: attacker.body.position.x, y: attacker.body.position.y - 60,
+                            text: '⚡ SPECIAL READY!', time: this.gameTime,
+                            color: '#FFE93E', size: 18,
+                        });
+                    }
+
+                    if (attacker.lifesteal > 0) {
+                        attacker.hp = Math.min(attacker.maxHp, attacker.hp + Math.round(damage * attacker.lifesteal / 100));
+                    }
+                    if (other.thornDamage > 0) attacker.hp = Math.max(1, attacker.hp - other.thornDamage);
+                    if (attacker.burnDamage > 0) other.burnUntil = this.gameTime + 2500;
+                    if (attacker.slowEffect > 0) other.slowUntil = this.gameTime + 1500;
+                }
+
                 other.invincible = this.gameTime + 350;
-                attacker.score += damage;
-                attacker.hitsLanded++;
-                other.hitsTaken++;
-
-                // Momentum
-                this.momentum[id] = Math.min(8, (this.momentum[id] || 0) + 1);
-                this.momentum[otherId] = Math.max(0, (this.momentum[otherId] || 0) - 0.5);
-
-                // Combo
-                if (this.gameTime - attacker.lastHitTime < attacker.comboWindowMs) {
-                    attacker.combo++;
-                    if (attacker.combo > attacker.maxCombo) attacker.maxCombo = attacker.combo;
-                } else {
-                    attacker.combo = 1;
-                }
-                attacker.lastHitTime = this.gameTime;
-
-                // Special meter
-                attacker.specialMeter = Math.min(100, attacker.specialMeter + 10 + (isCrit ? 15 : 0) + (attacker.combo >= 3 ? 8 : 0));
-                if (attacker.specialMeter >= 100 && !attacker.specialReady) {
-                    attacker.specialReady = true;
-                    this.comboEffects.push({
-                        x: attacker.body.position.x, y: attacker.body.position.y - 60,
-                        text: '⚡ SPECIAL READY!', time: this.gameTime,
-                        color: '#FFE93E', size: 18,
-                    });
-                }
-
-                // Lifesteal
-                if (attacker.lifesteal > 0) {
-                    attacker.hp = Math.min(attacker.maxHp, attacker.hp + Math.round(damage * attacker.lifesteal / 100));
-                }
-
-                // Thorn
-                if (other.thornDamage > 0) attacker.hp = Math.max(1, attacker.hp - other.thornDamage);
-
-                // Burn
-                if (attacker.burnDamage > 0) {
-                    other.burnUntil = this.gameTime + 2500;
-                }
-
-                // Slow
-                if (attacker.slowEffect > 0) other.slowUntil = this.gameTime + 1500;
 
                 // ── Visual effects ──
                 this.hitEffects.push({
@@ -699,19 +694,24 @@ export class GameEngine {
 
         if (this.roundPauseUntil > this.gameTime) return;
 
-        this.roundTimer -= delta / 1000;
-        if (this.roundTimer <= 0) { this._endRound(); return; }
+        // Round timer: only managed locally when NOT server-driven
+        if (!this.serverDriven) {
+            this.roundTimer -= delta / 1000;
+            if (this.roundTimer <= 0) { this._endRound(); return; }
+        }
 
         Engine.update(this.engine, delta);
         Object.keys(this.agents).forEach(id => this._aiTick(id));
         this._checkCollisions();
-        // KO disabled — matches always go to decision
+        // KO disabled locally — server controls match end
 
-        // Burn DOT
+        // Burn DOT visual particles (HP change only when not server-driven)
         Object.keys(this.agents).forEach(id => {
             const a = this.agents[id];
             if (a.burnUntil > this.gameTime && Math.random() < 0.04) {
-                a.hp = Math.max(1, a.hp - 2);
+                if (!this.serverDriven) {
+                    a.hp = Math.max(1, a.hp - 2);
+                }
                 this.particles.push({
                     x: a.body.position.x + (Math.random() - 0.5) * 12,
                     y: a.body.position.y - 8,
@@ -853,6 +853,99 @@ export class GameEngine {
             roundJustStarted: this.roundJustStarted,
             momentum: this.momentum,
         };
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SERVER SYNC — Overwrite game-logic state from server ticks
+    // Local engine keeps running for visuals (AI movement, physics,
+    // particles) but HP, rounds, and match end come from server.
+    // ═══════════════════════════════════════════════════════════
+
+    syncServerState(serverTick) {
+        if (!serverTick || !serverTick.fighters) return;
+        this.serverDriven = true;
+
+        const { fighters, round, roundTimer, roundPaused, finished, winner, method } = serverTick;
+
+        // Sync round transitions
+        if (round && round !== this._lastServerRound) {
+            if (round > this._lastServerRound && roundPaused) {
+                // Trigger visual round transition overlay
+                this.roundPauseUntil = this.gameTime + 3000;
+                this.roundJustStarted = this.gameTime + 3000;
+            }
+            this._lastServerRound = round;
+            this.currentRound = round;
+
+            // Reset HP positions toward center for new round visual
+            const ids = Object.keys(this.agents);
+            ids.forEach((id, idx) => {
+                const a = this.agents[id];
+                if (!a) return;
+                a.combo = 0;
+                a.aiPhase = 'approach';
+                a.aiPhaseTimer = 0;
+            });
+            this.momentum = { '1': 0, '2': 0 };
+        }
+        this.currentRound = round || this.currentRound;
+
+        // Sync round timer
+        if (typeof roundTimer === 'number') {
+            this.roundTimer = roundTimer;
+        }
+
+        // Sync round pause
+        if (roundPaused && this.roundPauseUntil <= this.gameTime) {
+            this.roundPauseUntil = this.gameTime + 3000;
+        }
+
+        // Sync fighter state
+        for (const [id, fState] of Object.entries(fighters)) {
+            const agent = this.agents[id];
+            if (!agent) continue;
+
+            // Overwrite HP from server (authoritative)
+            agent.hp = fState.hp;
+            agent.maxHp = fState.maxHp;
+
+            // Sync combat stats
+            agent.specialMeter = fState.specialMeter;
+            agent.specialReady = fState.specialReady;
+            agent.combo = fState.combo;
+            agent.maxCombo = fState.maxCombo;
+            agent.hitsLanded = fState.hitsLanded;
+            agent.critHits = fState.critHits;
+            agent.dodges = fState.dodges;
+
+            // Status effects — set timeout-based flags from server booleans
+            if (fState.isBurning && agent.burnUntil <= this.gameTime) {
+                agent.burnUntil = this.gameTime + 2500;
+            } else if (!fState.isBurning) {
+                agent.burnUntil = 0;
+            }
+
+            if (fState.isStunned && agent.stunUntil <= this.gameTime) {
+                agent.stunUntil = this.gameTime + 500;
+            } else if (!fState.isStunned) {
+                agent.stunUntil = 0;
+            }
+
+            if (fState.isSlowed && agent.slowUntil <= this.gameTime) {
+                agent.slowUntil = this.gameTime + 1500;
+            } else if (!fState.isSlowed) {
+                agent.slowUntil = 0;
+            }
+        }
+
+        // Sync match end
+        if (finished && !this.isFinished) {
+            this.isFinished = true;
+            this.winner = winner;
+            this.finishReason = (method || 'decision').toLowerCase();
+            this.finishTime = this.gameTime;
+            this.stop();
+        }
     }
 
     start() { this.isRunning = true; }

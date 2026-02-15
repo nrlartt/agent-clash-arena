@@ -41,6 +41,13 @@ export default function Arena() {
     const [matchKey, setMatchKey] = useState(0);
     const [finalStats, setFinalStats] = useState(null); // Captured at match end
 
+    // ── Server-authoritative fight state ──
+    const [serverFightState, setServerFightState] = useState(null);
+    const [fightRound, setFightRound] = useState(1);
+    const [fightMaxRounds, setFightMaxRounds] = useState(3);
+    const [fightRoundPaused, setFightRoundPaused] = useState(false);
+    const receivingServerTicks = useRef(false);
+
     // ── Live Data State ──
     const [liveStats, setLiveStats] = useState({
         viewers: 0,
@@ -108,7 +115,7 @@ export default function Arena() {
                     setRecentResults(resultsJson.data);
                 }
                 if (currentJson?.success && currentJson.data) {
-                    const { phase, match, timeLeft: tl, waitingReason: reason, waitingMessage: message } = currentJson.data;
+                    const { phase, match, timeLeft: tl, waitingReason: reason, waitingMessage: message, fightTick } = currentJson.data;
                     setCurrentMatch(match || null);
                     setWaitingReason(reason || null);
                     setWaitingMessage(message || null);
@@ -117,7 +124,18 @@ export default function Arena() {
                         setTimeLeft(tl || 0);
                     } else if (phase === 'FIGHTING' || phase === 'LIVE') {
                         setGameState('LIVE');
-                        if (typeof tl === 'number') setTimeLeft(tl);
+                        // Hydrate fight tick state if available
+                        if (fightTick) {
+                            receivingServerTicks.current = true;
+                            setServerFightState(fightTick);
+                            if (fightTick.fighters) setLiveAgentState(fightTick.fighters);
+                            if (fightTick.round) setFightRound(fightTick.round);
+                            if (fightTick.maxRounds) setFightMaxRounds(fightTick.maxRounds);
+                            if (typeof fightTick.roundTimer === 'number') setTimeLeft(fightTick.roundTimer);
+                            setFightRoundPaused(!!fightTick.roundPaused);
+                        } else if (typeof tl === 'number') {
+                            setTimeLeft(tl);
+                        }
                     } else if (phase === 'RESULT') {
                         setGameState('FINISHED');
                     } else {
@@ -147,22 +165,34 @@ export default function Arena() {
                 setMatchResult(null);
                 setFinalStats(null);
                 setLiveAgentState(null);
+                setServerFightState(null);
+                receivingServerTicks.current = false;
+                setFightRound(1);
+                setFightMaxRounds(3);
+                setFightRoundPaused(false);
                 setMatchKey(k => k + 1);
             } else if (phase === 'FIGHTING') {
                 setWaitingReason(null);
                 setWaitingMessage(null);
                 setGameState('LIVE');
+                receivingServerTicks.current = true;
                 if (typeof tl === 'number') setTimeLeft(tl);
             } else if (phase === 'RESULT') {
                 setWaitingReason(null);
                 setWaitingMessage(null);
                 if (result) setMatchResult(result);
-                // Capture final combat stats before clearing
-                setFinalStats(prev => prev); // keep existing if already set
-                setLiveAgentState(current => {
-                    if (current) setFinalStats(current);
-                    return current;
-                });
+                // Capture final combat stats from server fight result or live state
+                if (result?.fightStats) {
+                    setFinalStats(result.fightStats);
+                } else {
+                    setFinalStats(prev => prev);
+                    setLiveAgentState(current => {
+                        if (current) setFinalStats(current);
+                        return current;
+                    });
+                }
+                receivingServerTicks.current = false;
+                setServerFightState(null);
                 setGameState('FINISHED');
                 setTimeLeft(10);
             } else if (phase === 'COOLDOWN' || phase === 'WAITING' || phase === 'IDLE') {
@@ -196,6 +226,18 @@ export default function Arena() {
                     };
                 });
             }
+        });
+
+        // ── Server-authoritative fight ticks (every 500ms during FIGHTING) ──
+        socket.on('match:fight_tick', (tick) => {
+            if (!tick || !tick.fighters) return;
+            receivingServerTicks.current = true;
+            setServerFightState(tick);
+            setLiveAgentState(tick.fighters);
+            if (typeof tick.roundTimer === 'number') setTimeLeft(tick.roundTimer);
+            if (tick.round) setFightRound(tick.round);
+            if (tick.maxRounds) setFightMaxRounds(tick.maxRounds);
+            setFightRoundPaused(!!tick.roundPaused);
         });
 
         // Fight events (hits, combos, etc.)
@@ -267,16 +309,21 @@ export default function Arena() {
     // ── Canvas Callbacks ──
     const handleStateUpdate = useCallback((update) => {
         if (gameStateRef.current !== 'LIVE') return;
+        // When receiving server fight ticks, skip local engine ticks for liveAgentState
+        // Server ticks are authoritative for HP, stats, etc.
+        if (receivingServerTicks.current) return;
         if (update.type === 'tick') {
             setLiveAgentState(update.agents);
         }
     }, []);
 
     // Keep timer synchronized across clients by using phase end timestamp.
+    // During LIVE state, fight ticks from server provide the round timer instead.
     useEffect(() => {
         const phaseEndsAt = Number(currentMatch?.phaseEndsAt || 0);
         if (!phaseEndsAt) return undefined;
-        if (gameState !== 'BETTING' && gameState !== 'LIVE') return undefined;
+        // Only sync from phaseEndsAt during BETTING; LIVE uses server fight ticks
+        if (gameState !== 'BETTING') return undefined;
 
         const syncTimer = () => {
             const remaining = Math.max(0, Math.ceil((phaseEndsAt - Date.now()) / 1000));
@@ -397,7 +444,7 @@ export default function Arena() {
                     <div className="arena-ticker__item arena-ticker__game-state">
                         <Flame size={13} />
                         <span className={`arena-ticker__badge arena-ticker__badge--${gameState.toLowerCase()}`}>
-                            {gameState === 'LIVE' ? '⚔️ FIGHTING' : gameState === 'BETTING' ? '🎰 BETS OPEN' : gameState === 'WAITING' ? '⏳ NEXT MATCH' : '🏆 FINISHED'}
+                            {gameState === 'LIVE' ? `⚔️ R${fightRound}/${fightMaxRounds}` : gameState === 'BETTING' ? '🎰 BETS OPEN' : gameState === 'WAITING' ? '⏳ NEXT MATCH' : '🏆 FINISHED'}
                         </span>
                     </div>
                 </div>
@@ -563,7 +610,11 @@ export default function Arena() {
                                 </div>
                                 <div className={`match-status-pill match-status-pill--${gameState.toLowerCase()}`}>
                                     {gameState === 'FINISHED' ? '🏆 FINISHED' :
-                                        gameState === 'LIVE' ? '⚔️ LIVE MATCH' :
+                                        gameState === 'LIVE' ? (
+                                            fightRoundPaused
+                                                ? `🔔 ROUND ${fightRound}`
+                                                : `⚔️ ROUND ${fightRound}/${fightMaxRounds}`
+                                        ) :
                                             gameState === 'BETTING' ? '🎰 PLACE BETS' : '⏳ STARTING SOON'}
                                 </div>
                                 {gameState === 'LIVE' && liveAgentState && (
@@ -931,6 +982,7 @@ export default function Arena() {
                                         isPlaying={gameState === 'LIVE'}
                                         agent1Equipment={getEquipmentBonus(currentMatch?.agent1)}
                                         agent2Equipment={getEquipmentBonus(currentMatch?.agent2)}
+                                        serverFightState={serverFightState}
                                     />
                             </div>
                         )}

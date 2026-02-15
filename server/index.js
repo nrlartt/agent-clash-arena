@@ -291,6 +291,7 @@ app.get('/api/v1/arena/current', (_req, res) => {
             timeLeft: state.bettingTimeLeft,
             waitingReason: state.waitingReason || null,
             waitingMessage: state.waitingMessage || null,
+            fightTick: state.fightTick || null,
         },
     });
 });
@@ -495,6 +496,10 @@ io.on('connection', (socket) => {
     // Send recent match history
     if (state.matchHistory.length > 0) {
         socket.emit('match:history', state.matchHistory);
+    }
+    // If fight is in progress, send current fight tick so new clients see the live state
+    if (state.phase === 'FIGHTING' && state.fightTick) {
+        socket.emit('match:fight_tick', state.fightTick);
     }
 
     buildLiveStats()
