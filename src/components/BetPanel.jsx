@@ -11,6 +11,47 @@ import './BetPanel.css';
 
 const QUICK_AMOUNTS = [1, 5, 10, 25, 50];
 
+function resolveBetErrorMessage(err) {
+    const code = err?.code ?? err?.error?.code ?? err?.info?.error?.code;
+    const raw = [
+        err?.shortMessage,
+        err?.message,
+        err?.reason,
+        err?.error?.message,
+        err?.info?.error?.message,
+    ]
+        .filter(Boolean)
+        .join(' | ')
+        .toLowerCase();
+
+    if (
+        code === 'ACTION_REJECTED' ||
+        code === 4001 ||
+        raw.includes('user denied') ||
+        raw.includes('denied transaction signature') ||
+        raw.includes('rejected by user')
+    ) {
+        return 'Transaction rejected in wallet. Please approve the signature to place your bet.';
+    }
+
+    if (
+        raw.includes('configured chains are not supported by coinbase smart wallet') ||
+        raw.includes('coinbase smart wallet')
+    ) {
+        return 'Connected wallet does not support Monad Mainnet. Please switch to MetaMask or WalletConnect.';
+    }
+
+    if (raw.includes('insufficient funds')) {
+        return 'Insufficient MON balance for bet and gas.';
+    }
+
+    if (raw.includes('execution reverted')) {
+        return 'Transaction reverted by contract. Check that bets are open and you have not already bet this match.';
+    }
+
+    return err?.shortMessage || err?.message || 'Bet could not be placed.';
+}
+
 export default function BetPanel({
     match,
     walletConnected = false,
@@ -166,14 +207,7 @@ export default function BetPanel({
         } catch (err) {
             console.error('[BetPanel] placeBet error:', err);
             setBetStatus('error');
-
-            if (err.code === 'ACTION_REJECTED' || err.code === 4001) {
-                setBetMessage('Transaction cancelled.');
-            } else if (err.message?.includes('insufficient funds')) {
-                setBetMessage('Insufficient MON balance.');
-            } else {
-                setBetMessage(err.shortMessage || err.message || 'Bet could not be placed.');
-            }
+            setBetMessage(resolveBetErrorMessage(err));
             playSound('tick');
         } finally {
             setIsPlacing(false);

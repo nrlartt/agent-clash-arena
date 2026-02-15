@@ -47,23 +47,34 @@ export function WalletProvider({ children }) {
     });
     const setupRef = useRef(false);
 
-    // Pick the BEST wallet: prefer external (MetaMask, Coinbase, etc.) over embedded
+    function walletPriority(wallet) {
+        const type = String(wallet?.walletClientType || '').toLowerCase();
+        const connector = String(wallet?.connectorType || '').toLowerCase();
+
+        if (type === 'metamask') return 100;
+        if (connector === 'injected') return 90;
+        if (type === 'wallet_connect' || connector === 'wallet_connect') return 80;
+        if (type === 'rainbow') return 70;
+        if (type === 'coinbase_wallet') return 40;
+        return 50;
+    }
+
+    // Pick the BEST wallet: strongly prefer MetaMask/injected over smart wallets.
     const activeWallet = (() => {
         if (!privy.authenticated || manualDisconnected || isDisconnecting || !wallets || wallets.length === 0) return null;
+
+        const candidates = wallets.filter((w) => w && w.address);
+        if (candidates.length === 0) return null;
+
+        const bestWallet = [...candidates].sort((a, b) => walletPriority(b) - walletPriority(a))[0];
+
         if (selectedWallet && selectedWallet.address) {
-            return selectedWallet;
+            const selectedScore = walletPriority(selectedWallet);
+            const bestScore = walletPriority(bestWallet);
+            return selectedScore >= bestScore ? selectedWallet : bestWallet;
         }
-        // Find the first external (injected) wallet
-        const external = wallets.find(w =>
-            w.walletClientType === 'metamask' ||
-            w.walletClientType === 'coinbase_wallet' ||
-            w.walletClientType === 'rainbow' ||
-            w.walletClientType === 'wallet_connect' ||
-            w.connectorType === 'injected'
-        );
-        if (external) return external;
-        // Fallback to first wallet (could be embedded)
-        return wallets[0];
+
+        return bestWallet;
     })();
 
     const account = activeWallet?.address || null;
