@@ -83,6 +83,7 @@ npm run dev:full
 Health endpoints:
 - `GET /api/v1/health`
 - `GET /api/v1/stats`
+- `GET /api/v1/chain/status`
 - `GET /skill.md`
 
 ## Environment

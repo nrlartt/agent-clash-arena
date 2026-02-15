@@ -36,8 +36,40 @@ class BlockchainService {
         this.wallet = null;
         this.contract = null;
         this.enabled = false;
+        this.lastError = null;
+        this.lastErrorAt = null;
+        this.lastErrorOp = null;
 
         this._init();
+    }
+
+    _normalizeError(err) {
+        const raw = String(err?.shortMessage || err?.reason || err?.message || err || 'Unknown blockchain error');
+        const lowered = raw.toLowerCase();
+        if (lowered.includes('insufficient funds')) {
+            return { code: 'INSUFFICIENT_FUNDS', message: raw };
+        }
+        if (lowered.includes('only operator') || lowered.includes('unauthorized')) {
+            return { code: 'UNAUTHORIZED_OPERATOR', message: raw };
+        }
+        if (lowered.includes('match already exists')) {
+            return { code: 'MATCH_EXISTS', message: raw };
+        }
+        if (lowered.includes('network') || lowered.includes('timeout') || lowered.includes('timed out')) {
+            return { code: 'NETWORK_TIMEOUT', message: raw };
+        }
+        if (lowered.includes('execution reverted')) {
+            return { code: 'EVM_REVERT', message: raw };
+        }
+        return { code: 'CHAIN_ERROR', message: raw };
+    }
+
+    _setLastError(op, err) {
+        const normalized = this._normalizeError(err);
+        this.lastError = normalized.message;
+        this.lastErrorAt = Date.now();
+        this.lastErrorOp = op;
+        return normalized;
     }
 
     _init() {
@@ -78,9 +110,14 @@ class BlockchainService {
      * Create a match on-chain (called when a new match starts)
      */
     async createMatchOnChain(matchId, agent1Name, agent2Name) {
+        const result = await this.createMatchOnChainWithResult(matchId, agent1Name, agent2Name);
+        return result.ok ? result.txHash : null;
+    }
+
+    async createMatchOnChainWithResult(matchId, agent1Name, agent2Name) {
         if (!this.enabled) {
             logger.debug('[Blockchain] Skipping createMatch (disabled)');
-            return null;
+            return { ok: false, errorCode: 'DISABLED', errorMessage: 'Blockchain service is disabled (missing key or contract)' };
         }
 
         try {
@@ -95,13 +132,18 @@ class BlockchainService {
                 txHash: receipt.hash,
                 block: receipt.blockNumber,
             });
-            return receipt.hash;
+            this.lastError = null;
+            this.lastErrorAt = null;
+            this.lastErrorOp = null;
+            return { ok: true, txHash: receipt.hash, blockNumber: receipt.blockNumber };
         } catch (err) {
+            const normalized = this._setLastError('createMatch', err);
             logger.error('[Blockchain] createMatch failed', {
                 matchId,
-                error: err.message,
+                error: normalized.message,
+                code: normalized.code,
             });
-            return null;
+            return { ok: false, errorCode: normalized.code, errorMessage: normalized.message };
         }
     }
 
@@ -116,9 +158,13 @@ class BlockchainService {
             const tx = await withTimeout(this.contract.lockMatch(matchBytes, { gasLimit: 100000 }), TX_SEND_TIMEOUT, 'lockMatch.send');
             const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'lockMatch.wait');
             logger.info('[Blockchain] Match locked on-chain', { matchId, txHash: receipt.hash });
+            this.lastError = null;
+            this.lastErrorAt = null;
+            this.lastErrorOp = null;
             return receipt.hash;
         } catch (err) {
-            logger.error('[Blockchain] lockMatch failed', { matchId, error: err.message });
+            const normalized = this._setLastError('lockMatch', err);
+            logger.error('[Blockchain] lockMatch failed', { matchId, error: normalized.message, code: normalized.code });
             return null;
         }
     }
@@ -147,9 +193,13 @@ class BlockchainService {
                 winningSide: winningSide === Side.AgentA ? 'AgentA' : 'AgentB',
                 txHash: receipt.hash,
             });
+            this.lastError = null;
+            this.lastErrorAt = null;
+            this.lastErrorOp = null;
             return receipt.hash;
         } catch (err) {
-            logger.error('[Blockchain] resolveMatch failed', { matchId, error: err.message });
+            const normalized = this._setLastError('resolveMatch', err);
+            logger.error('[Blockchain] resolveMatch failed', { matchId, error: normalized.message, code: normalized.code });
             return null;
         }
     }
@@ -212,6 +262,58 @@ class BlockchainService {
         } catch {
             return '0';
         }
+    }
+
+    async getRuntimeStatus() {
+        const base = {
+            enabled: this.enabled,
+            walletAddress: this.wallet?.address || null,
+            contractAddress: this.contract?.target || null,
+            lastError: this.lastError || null,
+            lastErrorAt: this.lastErrorAt || null,
+            lastErrorOp: this.lastErrorOp || null,
+        };
+
+        if (!this.enabled) return base;
+
+        let operatorBalance = null;
+        let owner = null;
+        let operator = null;
+        let signerIsOwner = null;
+        let signerIsOperator = null;
+
+        try {
+            operatorBalance = await this.getOperatorBalance();
+        } catch {
+            operatorBalance = null;
+        }
+
+        try {
+            owner = await this.contract.owner();
+        } catch {
+            owner = null;
+        }
+        try {
+            operator = await this.contract.operator();
+        } catch {
+            operator = null;
+        }
+
+        if (owner && this.wallet?.address) {
+            signerIsOwner = owner.toLowerCase() === this.wallet.address.toLowerCase();
+        }
+        if (operator && this.wallet?.address) {
+            signerIsOperator = operator.toLowerCase() === this.wallet.address.toLowerCase();
+        }
+
+        return {
+            ...base,
+            owner,
+            operator,
+            operatorBalance,
+            signerIsOwner,
+            signerIsOperator,
+        };
     }
 }
 

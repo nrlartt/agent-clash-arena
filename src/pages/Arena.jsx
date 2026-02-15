@@ -56,6 +56,7 @@ export default function Arena() {
     const [recentResults, setRecentResults] = useState([]);
     const [wsConnected, setWsConnected] = useState(false);
     const [waitingReason, setWaitingReason] = useState(null);
+    const [waitingMessage, setWaitingMessage] = useState(null);
 
     const { account } = useWallet();
     const { inventories } = useInventory();
@@ -108,9 +109,10 @@ export default function Arena() {
                     setRecentResults(resultsJson.data);
                 }
                 if (currentJson?.success && currentJson.data) {
-                    const { phase, match, timeLeft: tl, waitingReason: reason } = currentJson.data;
+                    const { phase, match, timeLeft: tl, waitingReason: reason, waitingMessage: message } = currentJson.data;
                     setCurrentMatch(match || null);
                     setWaitingReason(reason || null);
+                    setWaitingMessage(message || null);
                     if (phase === 'BETTING') {
                         setGameState('BETTING');
                         setTimeLeft(tl || 0);
@@ -132,7 +134,7 @@ export default function Arena() {
 
         // ── Match phase updates from backend matchmaker ──
         socket.on('match:phase', (data) => {
-            const { phase, match, timeLeft: tl, result, reason } = data;
+            const { phase, match, timeLeft: tl, result, reason, message } = data;
 
             if (Object.prototype.hasOwnProperty.call(data, 'match')) {
                 setCurrentMatch(match || null);
@@ -140,6 +142,7 @@ export default function Arena() {
 
             if (phase === 'BETTING') {
                 setWaitingReason(null);
+                setWaitingMessage(null);
                 setGameState('BETTING');
                 setTimeLeft(tl || 30);
                 setMatchResult(null);
@@ -149,10 +152,12 @@ export default function Arena() {
                 setMatchKey(k => k + 1);
             } else if (phase === 'FIGHTING') {
                 setWaitingReason(null);
+                setWaitingMessage(null);
                 setGameState('LIVE');
                 if (typeof tl === 'number') setTimeLeft(tl);
             } else if (phase === 'RESULT') {
                 setWaitingReason(null);
+                setWaitingMessage(null);
                 if (result) setMatchResult(result);
                 // Capture final combat stats before clearing
                 setFinalStats(prev => prev); // keep existing if already set
@@ -164,6 +169,7 @@ export default function Arena() {
                 setTimeLeft(10);
             } else if (phase === 'COOLDOWN' || phase === 'WAITING' || phase === 'IDLE') {
                 setWaitingReason(reason || null);
+                setWaitingMessage(message || null);
                 setGameState('WAITING');
                 setTimeLeft(typeof tl === 'number' ? tl : 0);
             }
@@ -642,7 +648,7 @@ export default function Arena() {
                                     <p className="arena-placeholder__subtitle">
                                         {gameState === 'BETTING'
                                             ? 'Pool threshold dolunca maç otomatik başlar.'
-                                            : WAITING_REASON_LABELS[waitingReason] || (currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Maç koşulları bekleniyor...')
+                                            : waitingMessage || WAITING_REASON_LABELS[waitingReason] || (currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Maç koşulları bekleniyor...')
                                         }
                                     </p>
                                     {gameState === 'BETTING' && poolMinMON > 0 && (

@@ -237,6 +237,18 @@ app.get('/api/v1/health', async (_req, res) => {
     }
 });
 
+app.get('/api/v1/chain/status', async (_req, res) => {
+    try {
+        const blockchain = require('./utils/blockchain');
+        const data = typeof blockchain.getRuntimeStatus === 'function'
+            ? await blockchain.getRuntimeStatus()
+            : { enabled: !!blockchain.enabled };
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message || 'Failed to read chain status' });
+    }
+});
+
 // ── skill.md endpoint (dynamically injects correct base URL) ─
 app.get('/skill.md', (req, res) => {
     const fs = require('fs');
@@ -278,6 +290,7 @@ app.get('/api/v1/arena/current', (_req, res) => {
             match: state.match,
             timeLeft: state.bettingTimeLeft,
             waitingReason: state.waitingReason || null,
+            waitingMessage: state.waitingMessage || null,
         },
     });
 });
@@ -457,6 +470,7 @@ async function buildLiveStats() {
         poolRemainingMON: live.poolRemainingMON,
         poolReady: live.poolReady,
         waitingReason: live.waitingReason || null,
+        waitingMessage: live.waitingMessage || null,
         phase: live.phase,
         bettingTimeLeft: live.bettingTimeLeft,
         currentMatchId: live.currentMatchId,
@@ -475,6 +489,7 @@ io.on('connection', (socket) => {
         match: state.match || null,
         timeLeft: state.bettingTimeLeft,
         reason: state.waitingReason || null,
+        message: state.waitingMessage || null,
     });
     // Send recent match history
     if (state.matchHistory.length > 0) {

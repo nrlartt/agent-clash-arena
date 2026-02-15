@@ -93,6 +93,7 @@ class AutoMatchmaker {
         this.bettingTimeLeft = 0;
         this.bettingInterval = null;
         this.waitingReason = null;
+        this.waitingMessage = null;
         this._fightStartPending = false;
         this.matchHistory = [];
         this._realAgentsCache = [];
@@ -138,6 +139,7 @@ class AutoMatchmaker {
             match: this.currentMatch,
             bettingTimeLeft: phaseTimeLeft,
             waitingReason: this.waitingReason,
+            waitingMessage: this.waitingMessage,
             matchHistory: this.matchHistory.slice(0, 10),
         };
     }
@@ -155,6 +157,7 @@ class AutoMatchmaker {
         this._fightStartPending = false;
         this.phase = 'WAITING';
         this.waitingReason = reason;
+        this.waitingMessage = message || null;
         this.currentMatch = null;
         this.bettingTimeLeft = Math.ceil(retryMs / 1000);
 
@@ -225,6 +228,7 @@ class AutoMatchmaker {
 
         this.currentMatch = restoredMatch;
         this.waitingReason = null;
+        this.waitingMessage = null;
         const status = String(candidate.status || 'betting').toLowerCase();
         const now = Date.now();
         const savedPhaseEnd = toTimestamp(candidate.phaseEndsAt);
@@ -453,6 +457,7 @@ class AutoMatchmaker {
             poolRemainingMON: Math.max(0, requiredPool - activePool),
             poolReady: activePool >= requiredPool,
             waitingReason: this.waitingReason,
+            waitingMessage: this.waitingMessage,
             recentResults: this.matchHistory.slice(0, 10),
         };
     }
@@ -536,17 +541,27 @@ class AutoMatchmaker {
         const hasRealAgent = true;
 
         // Hard requirement: every match must exist on-chain before betting opens.
-        const onChainTxHash = await blockchain.createMatchOnChain(matchId, agent1.name, agent2.name);
-        if (!onChainTxHash) {
+        let creation;
+        if (typeof blockchain.createMatchOnChainWithResult === 'function') {
+            creation = await blockchain.createMatchOnChainWithResult(matchId, agent1.name, agent2.name);
+        } else {
+            const hash = await blockchain.createMatchOnChain(matchId, agent1.name, agent2.name);
+            creation = { ok: !!hash, txHash: hash || null };
+        }
+
+        if (!creation?.ok) {
+            const detail = String(creation?.errorMessage || blockchain.lastError || 'unknown error').slice(0, 160);
             this._enterWaitingState(
                 'CHAIN_CREATE_FAILED',
-                'Could not create the next match on-chain. Retrying shortly.',
+                `Could not create the next match on-chain (${detail}). Retrying shortly.`,
                 WAITING_RETRY_MS
             );
             return;
         }
+        const onChainTxHash = creation.txHash;
 
         this.waitingReason = null;
+        this.waitingMessage = null;
         this._fightStartPending = false;
 
         this.currentMatch = {
@@ -673,6 +688,7 @@ class AutoMatchmaker {
         clearInterval(this.bettingInterval);
         this._fightStartPending = false;
         this.waitingReason = null;
+        this.waitingMessage = null;
         this.phase = 'COOLDOWN';
         this.bettingTimeLeft = 0;
         try { this.io.emit('match:phase', { phase: 'COOLDOWN' }); } catch { /* ignore */ }
