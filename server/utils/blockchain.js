@@ -29,6 +29,11 @@ function withTimeout(promise, ms, label) {
 
 const TX_SEND_TIMEOUT = Number.parseInt(process.env.CHAIN_TX_SEND_TIMEOUT_MS || '30000', 10);
 const TX_WAIT_TIMEOUT = Number.parseInt(process.env.CHAIN_TX_WAIT_TIMEOUT_MS || '180000', 10);
+const TX_RETRY_COUNT = Math.max(1, Number.parseInt(process.env.CHAIN_TX_RETRY_COUNT || '3', 10));
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 class BlockchainService {
     constructor() {
@@ -37,6 +42,7 @@ class BlockchainService {
         this.contract = null;
         this.enabled = false;
         this.lastError = null;
+        this.lastErrorCode = null;
         this.lastErrorAt = null;
         this.lastErrorOp = null;
 
@@ -44,7 +50,25 @@ class BlockchainService {
     }
 
     _normalizeError(err) {
-        const raw = String(err?.shortMessage || err?.reason || err?.message || err || 'Unknown blockchain error');
+        const details = [];
+        const pushDetail = (value) => {
+            if (!value) return;
+            const str = String(value).trim();
+            if (!str) return;
+            if (details.includes(str)) return;
+            details.push(str);
+        };
+
+        const nestedErrorMessage = err?.error?.reason || err?.error?.message || err?.info?.error?.reason || err?.info?.error?.message;
+        const nestedPayloadError = err?.payload?.error?.message || err?.info?.payload?.error?.message;
+        const rawMessage = err?.reason || err?.message || err?.shortMessage || err || 'Unknown blockchain error';
+
+        pushDetail(nestedErrorMessage);
+        pushDetail(nestedPayloadError);
+        pushDetail(rawMessage);
+        pushDetail(err?.data?.message || err?.data);
+
+        const raw = details.find((item) => !/could not coalesce error/i.test(item)) || details[0] || 'Unknown blockchain error';
         const lowered = raw.toLowerCase();
         if (lowered.includes('insufficient funds')) {
             return { code: 'INSUFFICIENT_FUNDS', message: raw };
@@ -52,11 +76,20 @@ class BlockchainService {
         if (lowered.includes('only operator') || lowered.includes('unauthorized')) {
             return { code: 'UNAUTHORIZED_OPERATOR', message: raw };
         }
+        if (lowered.includes('nonce too low') || lowered.includes('already known')) {
+            return { code: 'NONCE_CONFLICT', message: raw };
+        }
         if (lowered.includes('match already exists')) {
             return { code: 'MATCH_EXISTS', message: raw };
         }
         if (lowered.includes('network') || lowered.includes('timeout') || lowered.includes('timed out')) {
             return { code: 'NETWORK_TIMEOUT', message: raw };
+        }
+        if (lowered.includes('429') || lowered.includes('rate limit') || lowered.includes('too many requests')) {
+            return { code: 'RPC_RATE_LIMIT', message: raw };
+        }
+        if (lowered.includes('503') || lowered.includes('service unavailable')) {
+            return { code: 'RPC_UNAVAILABLE', message: raw };
         }
         if (lowered.includes('execution reverted')) {
             return { code: 'EVM_REVERT', message: raw };
@@ -67,9 +100,36 @@ class BlockchainService {
     _setLastError(op, err) {
         const normalized = this._normalizeError(err);
         this.lastError = normalized.message;
+        this.lastErrorCode = normalized.code;
         this.lastErrorAt = Date.now();
         this.lastErrorOp = op;
         return normalized;
+    }
+
+    _isRetryableError(code, message) {
+        const m = String(message || '').toLowerCase();
+        if (['NETWORK_TIMEOUT', 'RPC_RATE_LIMIT', 'RPC_UNAVAILABLE', 'CHAIN_ERROR', 'NONCE_CONFLICT'].includes(code)) return true;
+        if (m.includes('could not coalesce error')) return true;
+        if (m.includes('header not found') || m.includes('timeout') || m.includes('temporarily unavailable')) return true;
+        return false;
+    }
+
+    async _buildTxOverrides(defaultGasLimit) {
+        const overrides = { gasLimit: defaultGasLimit };
+        try {
+            const feeData = await this.provider.getFeeData();
+            if (feeData?.maxFeePerGas && feeData?.maxPriorityFeePerGas) {
+                overrides.maxFeePerGas = feeData.maxFeePerGas;
+                overrides.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
+                return overrides;
+            }
+            if (feeData?.gasPrice) {
+                overrides.gasPrice = feeData.gasPrice;
+            }
+        } catch (err) {
+            logger.warn('[Blockchain] Could not fetch fee data, using node defaults', { error: err.message });
+        }
+        return overrides;
     }
 
     _init() {
@@ -120,30 +180,58 @@ class BlockchainService {
             return { ok: false, errorCode: 'DISABLED', errorMessage: 'Blockchain service is disabled (missing key or contract)' };
         }
 
-        try {
-            const matchBytes = this._toBytes32(matchId);
-            const tx = await withTimeout(
-                this.contract.createMatch(matchBytes, agent1Name, agent2Name, { gasLimit: 300000 }),
-                TX_SEND_TIMEOUT, 'createMatch.send'
-            );
-            const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'createMatch.wait');
-            logger.info('[Blockchain] Match created on-chain', {
-                matchId,
-                txHash: receipt.hash,
-                block: receipt.blockNumber,
-            });
-            this.lastError = null;
-            this.lastErrorAt = null;
-            this.lastErrorOp = null;
-            return { ok: true, txHash: receipt.hash, blockNumber: receipt.blockNumber };
-        } catch (err) {
-            const normalized = this._setLastError('createMatch', err);
-            logger.error('[Blockchain] createMatch failed', {
-                matchId,
-                error: normalized.message,
-                code: normalized.code,
-            });
-            return { ok: false, errorCode: normalized.code, errorMessage: normalized.message };
+        const matchBytes = this._toBytes32(matchId);
+
+        for (let attempt = 1; attempt <= TX_RETRY_COUNT; attempt += 1) {
+            try {
+                const overrides = await this._buildTxOverrides(300000);
+                const tx = await withTimeout(
+                    this.contract.createMatch(matchBytes, agent1Name, agent2Name, overrides),
+                    TX_SEND_TIMEOUT, 'createMatch.send'
+                );
+                const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'createMatch.wait');
+                logger.info('[Blockchain] Match created on-chain', {
+                    matchId,
+                    txHash: receipt.hash,
+                    block: receipt.blockNumber,
+                    attempt,
+                });
+                this.lastError = null;
+                this.lastErrorCode = null;
+                this.lastErrorAt = null;
+                this.lastErrorOp = null;
+                return { ok: true, txHash: receipt.hash, blockNumber: receipt.blockNumber, attempt };
+            } catch (err) {
+                const normalized = this._normalizeError(err);
+                const retryable = this._isRetryableError(normalized.code, normalized.message);
+                const isLastAttempt = attempt >= TX_RETRY_COUNT;
+
+                logger.warn('[Blockchain] createMatch attempt failed', {
+                    matchId,
+                    attempt,
+                    retryable,
+                    code: normalized.code,
+                    error: normalized.message,
+                });
+
+                if (!isLastAttempt && retryable) {
+                    await sleep(attempt * 1000);
+                    continue;
+                }
+
+                this.lastError = normalized.message;
+                this.lastErrorCode = normalized.code;
+                this.lastErrorAt = Date.now();
+                this.lastErrorOp = 'createMatch';
+
+                logger.error('[Blockchain] createMatch failed', {
+                    matchId,
+                    attempt,
+                    error: normalized.message,
+                    code: normalized.code,
+                });
+                return { ok: false, errorCode: normalized.code, errorMessage: normalized.message, attempt };
+            }
         }
     }
 
@@ -159,6 +247,7 @@ class BlockchainService {
             const receipt = await withTimeout(tx.wait(), TX_WAIT_TIMEOUT, 'lockMatch.wait');
             logger.info('[Blockchain] Match locked on-chain', { matchId, txHash: receipt.hash });
             this.lastError = null;
+            this.lastErrorCode = null;
             this.lastErrorAt = null;
             this.lastErrorOp = null;
             return receipt.hash;
@@ -194,6 +283,7 @@ class BlockchainService {
                 txHash: receipt.hash,
             });
             this.lastError = null;
+            this.lastErrorCode = null;
             this.lastErrorAt = null;
             this.lastErrorOp = null;
             return receipt.hash;
@@ -269,7 +359,9 @@ class BlockchainService {
             enabled: this.enabled,
             walletAddress: this.wallet?.address || null,
             contractAddress: this.contract?.target || null,
+            rpcUrl: this.provider?.connection?.url || null,
             lastError: this.lastError || null,
+            lastErrorCode: this.lastErrorCode || null,
             lastErrorAt: this.lastErrorAt || null,
             lastErrorOp: this.lastErrorOp || null,
         };

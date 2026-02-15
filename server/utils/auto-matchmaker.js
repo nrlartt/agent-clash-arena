@@ -550,10 +550,11 @@ class AutoMatchmaker {
         }
 
         if (!creation?.ok) {
+            const code = creation?.errorCode || blockchain.lastErrorCode || 'CHAIN_ERROR';
             const detail = String(creation?.errorMessage || blockchain.lastError || 'unknown error').slice(0, 160);
             this._enterWaitingState(
                 'CHAIN_CREATE_FAILED',
-                `Could not create the next match on-chain (${detail}). Retrying shortly.`,
+                `Could not create the next match on-chain [${code}] (${detail}). Retrying shortly.`,
                 WAITING_RETRY_MS
             );
             return;
