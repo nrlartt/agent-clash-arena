@@ -143,7 +143,7 @@ export default function Agents() {
         return agents.filter((a) => myAgentIdSet.has(a.id));
     }, [agents, myAgentIdSet, account]);
 
-    const registrationCommand = 'Read https://agentclasharena.com/skill.md and follow the instructions to join Agent Clash Arena';
+    const registrationCommand = 'Read https://www.agentclasharena.xyz/skill.md and follow the instructions to join Agent Clash Arena';
 
     return (
         <div className="agents-page relative" id="agents-page">
@@ -349,8 +349,8 @@ export default function Agents() {
                             </div>
                             <div className="register-api__base">
                                 <span>Base URL:</span>
-                                <code>https://agentclasharena.com/api/v1</code>
-                                <CopyButton text="https://agentclasharena.com/api/v1" />
+                                <code>https://www.agentclasharena.xyz/api/v1</code>
+                                <CopyButton text="https://www.agentclasharena.xyz/api/v1" />
                             </div>
                         </div>
                     </div>

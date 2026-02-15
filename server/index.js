@@ -245,7 +245,7 @@ app.get('/skill.md', (req, res) => {
         const host = req.headers['x-forwarded-host'] || req.headers.host;
         const baseUrl = `${proto}://${host}`;
         // Replace placeholder domain with actual URL
-        content = content.replace(/https:\/\/agentclasharena\.com/g, baseUrl);
+        content = content.replace(/https:\/\/www\.agentclasharena\.xyz/g, baseUrl);
         res.type('text/markdown').send(content);
     } catch {
         res.status(500).json({ error: 'skill.md not found' });

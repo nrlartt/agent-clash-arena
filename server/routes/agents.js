@@ -138,7 +138,7 @@ router.post('/register', async (req, res) => {
         agent: {
             id: agent.id,
             api_key: agent.apiKey,
-            claim_url: `https://agentclasharena.com/claim/${claimToken}`,
+            claim_url: `https://www.agentclasharena.xyz/claim/${claimToken}`,
             verification_code: verificationCode,
             wallet_address: walletRecord.address,
             wallet_key_export: walletKeyPackage,
@@ -187,7 +187,7 @@ router.get('/status', authAgent, (req, res) => {
         return res.json({
             success: true,
             status: 'pending_claim',
-            claim_url: `https://agentclasharena.com/claim/${agent.claimToken}`,
+            claim_url: `https://www.agentclasharena.xyz/claim/${agent.claimToken}`,
             hint: 'Send the claim_url to your human to verify ownership.',
         });
     }
