@@ -14,7 +14,7 @@ import { useWallet } from '../context/WalletContext';
 import GameCanvas from '../components/GameCanvas';
 import BetPanel from '../components/BetPanel';
 import LiveChat from '../components/LiveChat';
-import { PLATFORM_STATS, AGENTS } from '../data/mockData';
+import { AGENTS } from '../data/mockData';
 import { calculateEquipmentBonus } from '../data/inventory';
 import { useInventory } from '../context/InventoryContext';
 import { playSound } from '../utils/audio';
@@ -39,15 +39,14 @@ export default function Arena() {
 
     // ── Live Data State ──
     const [liveStats, setLiveStats] = useState({
-        viewers: PLATFORM_STATS.onlineViewers,
-        totalBetsToday: PLATFORM_STATS.totalMONWagered,
-        matchesPlayedToday: PLATFORM_STATS.totalMatches,
-        activeBetsPool: 5420,
+        viewers: 0,
+        totalBetsToday: 0,
+        matchesPlayedToday: 0,
+        activeBetsPool: 0,
     });
     const [activityFeed, setActivityFeed] = useState([]);
     const [recentResults, setRecentResults] = useState([]);
     const [wsConnected, setWsConnected] = useState(false);
-    const [matchCount, setMatchCount] = useState(0);
 
     const { account } = useWallet();
     const { inventories } = useInventory();
@@ -78,6 +77,48 @@ export default function Arena() {
             setWsConnected(false);
         });
 
+        // Load current live state once from REST for quick hydration.
+        const loadInitialArenaState = async () => {
+            try {
+                const [statsRes, resultsRes, currentRes] = await Promise.all([
+                    fetch(`${API_URL}/arena/live-stats`),
+                    fetch(`${API_URL}/arena/recent-results`),
+                    fetch(`${API_URL}/arena/current`),
+                ]);
+
+                const [statsJson, resultsJson, currentJson] = await Promise.all([
+                    statsRes.json().catch(() => null),
+                    resultsRes.json().catch(() => null),
+                    currentRes.json().catch(() => null),
+                ]);
+
+                if (statsJson?.success && statsJson.data) {
+                    setLiveStats(prev => ({ ...prev, ...statsJson.data }));
+                }
+                if (resultsJson?.success && Array.isArray(resultsJson.data)) {
+                    setRecentResults(resultsJson.data);
+                }
+                if (currentJson?.success && currentJson.data?.match) {
+                    const { phase, match, timeLeft: tl } = currentJson.data;
+                    setCurrentMatch(match);
+                    if (phase === 'BETTING') {
+                        setGameState('BETTING');
+                        setTimeLeft(tl || 0);
+                    } else if (phase === 'FIGHTING' || phase === 'LIVE') {
+                        setGameState('LIVE');
+                        if (typeof tl === 'number') setTimeLeft(tl);
+                    } else if (phase === 'RESULT') {
+                        setGameState('FINISHED');
+                    } else {
+                        setGameState('WAITING');
+                    }
+                }
+            } catch {
+                // WebSocket stream still handles live state.
+            }
+        };
+        loadInitialArenaState();
+
         // ── Match phase updates from backend matchmaker ──
         socket.on('match:phase', (data) => {
             const { phase, match, timeLeft: tl, result } = data;
@@ -96,6 +137,7 @@ export default function Arena() {
                 setMatchKey(k => k + 1);
             } else if (phase === 'FIGHTING') {
                 setGameState('LIVE');
+                if (typeof tl === 'number') setTimeLeft(tl);
             } else if (phase === 'RESULT') {
                 if (result) setMatchResult(result);
                 // Capture final combat stats before clearing
@@ -106,10 +148,9 @@ export default function Arena() {
                 });
                 setGameState('FINISHED');
                 setTimeLeft(10);
-                setMatchCount(c => c + 1);
             } else if (phase === 'COOLDOWN') {
                 setGameState('WAITING');
-                setTimeLeft(5);
+                setTimeLeft(typeof tl === 'number' ? tl : 5);
             }
         });
 
@@ -159,6 +200,20 @@ export default function Arena() {
             ].slice(0, 30));
         });
 
+        socket.on('bet:error', ({ error }) => {
+            setActivityFeed(prev => [
+                {
+                    id: Date.now() + Math.random(),
+                    type: 'bet_error',
+                    icon: '⚠️',
+                    text: error || 'Bet rejected',
+                    color: '#FF6B35',
+                    timestamp: Date.now(),
+                },
+                ...prev,
+            ].slice(0, 30));
+        });
+
         return () => {
             socket.disconnect();
         };
@@ -198,6 +253,30 @@ export default function Arena() {
     const handleMatchEnd = useCallback(() => {
         // No-op: backend controls match lifecycle
     }, []);
+
+    const sendBetToBackend = useCallback((bet) => (
+        new Promise((resolve) => {
+            const socket = socketRef.current;
+            if (!socket || !wsConnected) {
+                resolve({ ok: false, error: 'Live connection lost. Please retry.' });
+                return;
+            }
+
+            let settled = false;
+            const timeout = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                resolve({ ok: false, error: 'Arena server confirmation timed out.' });
+            }, 10000);
+
+            socket.emit('match:bet', bet, (response) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeout);
+                resolve(response || { ok: false, error: 'No response from arena server.' });
+            });
+        })
+    ), [wsConnected]);
 
     // ── Computed ──
     const winnerAgent = useMemo(() => {
@@ -533,7 +612,7 @@ export default function Arena() {
                                     <p className="arena-placeholder__subtitle">
                                         {gameState === 'BETTING'
                                             ? 'Place your bets before the timer runs out!'
-                                            : `Match #${matchCount + 1} starting soon...`
+                                            : currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Next match starting soon...'
                                         }
                                     </p>
                                     {gameState === 'WAITING' && currentMatch && (
@@ -807,13 +886,10 @@ export default function Arena() {
                     <BetPanel
                         match={currentMatch}
                         walletConnected={!!account}
+                        liveConnected={wsConnected}
                         disabled={gameState !== 'BETTING'}
                         timer={gameState === 'BETTING' ? timeLeft : null}
-                        onBetPlaced={(bet) => {
-                            if (socketRef.current) {
-                                socketRef.current.emit('match:bet', bet);
-                            }
-                        }}
+                        onBetPlaced={sendBetToBackend}
                     />
 
                     {/* Mini Leaderboard */}

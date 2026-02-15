@@ -84,33 +84,56 @@ class MongoDatabase {
     }
 
     async getMatchById(id) {
-        return await Match.findById(id).lean();
+        const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+        const query = isObjectId
+            ? { _id: id }
+            : { $or: [{ id }, { matchId: id }] };
+        return await Match.findOne(query).lean();
     }
 
     async getLiveMatches() {
-        return await Match.find({ status: 'live' }).lean();
+        return await Match.find({ status: { $in: ['upcoming', 'live', 'betting', 'fighting'] } }).sort({ createdAt: -1 }).lean();
     }
 
     async addMatch(matchData) {
+        if (matchData.id || matchData.matchId) {
+            const matchKey = matchData.id || matchData.matchId;
+            return await Match.findOneAndUpdate(
+                { $or: [{ id: matchKey }, { matchId: matchKey }] },
+                { ...matchData, id: matchData.id || matchKey, matchId: matchData.matchId || matchKey },
+                { new: true, upsert: true, setDefaultsOnInsert: true }
+            ).lean();
+        }
         const match = new Match(matchData);
         await match.save();
         return match.toJSON();
     }
 
     async updateMatch(id, updates) {
-        return await Match.findByIdAndUpdate(id, updates, { new: true }).lean();
+        const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+        const query = isObjectId
+            ? { _id: id }
+            : { $or: [{ id }, { matchId: id }] };
+        return await Match.findOneAndUpdate(query, updates, { new: true }).lean();
     }
 
     async removeMatch(id) {
-        await Match.findByIdAndDelete(id);
+        const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+        const query = isObjectId
+            ? { _id: id }
+            : { $or: [{ id }, { matchId: id }] };
+        await Match.findOneAndDelete(query);
     }
 
     // ── Match History ───────────────────────────────────────
     async addMatchHistory(entry) {
-        // In MongoDB, match history is just finished matches
-        // We store it as a regular match with status 'finished'
-        if (entry._id || entry.id) {
-            return await Match.findByIdAndUpdate(entry._id || entry.id, { status: 'finished', ...entry }, { new: true }).lean();
+        const key = entry.id || entry.matchId;
+        if (key) {
+            return await Match.findOneAndUpdate(
+                { $or: [{ id: key }, { matchId: key }] },
+                { status: 'finished', id: entry.id || key, matchId: entry.matchId || key, ...entry },
+                { new: true, upsert: true, setDefaultsOnInsert: true }
+            ).lean();
         }
         const match = new Match({ ...entry, status: 'finished' });
         await match.save();
@@ -118,7 +141,12 @@ class MongoDatabase {
     }
 
     async getMatchHistory(limit = 20) {
-        return await Match.find({ status: 'finished' }).sort({ finishedAt: -1 }).limit(limit).lean();
+        return await Match.find({
+            $or: [
+                { status: 'finished' },
+                { completedAt: { $exists: true, $ne: null } },
+            ],
+        }).sort({ completedAt: -1, finishedAt: -1, createdAt: -1 }).limit(limit).lean();
     }
 
     // ── Bets ────────────────────────────────────────────────
@@ -127,17 +155,67 @@ class MongoDatabase {
     }
 
     async addBet(betData) {
-        const bet = new Bet(betData);
+        const payload = {
+            ...betData,
+            bettor: betData.bettor || betData.walletAddress || null,
+            placedAt: betData.placedAt || Date.now(),
+        };
+        if (payload.id) {
+            return await Bet.findOneAndUpdate(
+                { id: payload.id },
+                payload,
+                { new: true, upsert: true, setDefaultsOnInsert: true }
+            ).lean();
+        }
+        const bet = new Bet(payload);
         await bet.save();
         return bet.toJSON();
     }
 
     async updateBet(id, updates) {
-        return await Bet.findByIdAndUpdate(id, updates, { new: true }).lean();
+        const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+        const query = isObjectId ? { _id: id } : { id };
+        return await Bet.findOneAndUpdate(query, updates, { new: true }).lean();
     }
 
     async getBetsByWallet(walletAddress) {
-        return await Bet.find({ bettor: walletAddress }).sort({ createdAt: -1 }).lean();
+        return await Bet.find({
+            $or: [{ walletAddress }, { bettor: walletAddress }],
+        }).sort({ createdAt: -1 }).lean();
+    }
+
+    async getBetStats() {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const [totalAgg, todayAgg, totalCount, todayCount] = await Promise.all([
+            Bet.aggregate([{ $group: { _id: null, volume: { $sum: '$amount' } } }]),
+            Bet.aggregate([
+                {
+                    $match: {
+                        $or: [
+                            { placedAt: { $gte: startOfDay.getTime() } },
+                            { createdAt: { $gte: startOfDay } },
+                        ],
+                    },
+                },
+                { $group: { _id: null, volume: { $sum: '$amount' } } },
+            ]),
+            Bet.countDocuments({}),
+            Bet.countDocuments({
+                $or: [
+                    { placedAt: { $gte: startOfDay.getTime() } },
+                    { createdAt: { $gte: startOfDay } },
+                ],
+            }),
+        ]);
+
+        return {
+            totalCount: Number(totalCount || 0),
+            totalVolume: Number(totalAgg?.[0]?.volume || 0),
+            todayCount: Number(todayCount || 0),
+            todayVolume: Number(todayAgg?.[0]?.volume || 0),
+        };
     }
 
     // ── Activity Feed ───────────────────────────────────────

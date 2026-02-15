@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { usePrivy, useWallets, useActiveWallet } from '@privy-io/react-auth';
 import { BrowserProvider, formatEther, JsonRpcProvider } from 'ethers';
 
 const MONAD_CHAIN_ID = 143;
@@ -30,11 +30,13 @@ function getRpcProvider() {
 export function WalletProvider({ children }) {
     const privy = usePrivy();
     const { wallets } = useWallets();
+    const { wallet: selectedWallet } = useActiveWallet();
 
     const [balance, setBalance] = useState(null);
     const [chainId, setChainId] = useState(null);
     const [provider, setProvider] = useState(null);
     const [error, setError] = useState(null);
+    const [isDisconnecting, setIsDisconnecting] = useState(false);
     const [manualDisconnected, setManualDisconnected] = useState(() => {
         if (typeof window === 'undefined') return false;
         return window.sessionStorage.getItem(MANUAL_DISCONNECT_KEY) === '1';
@@ -43,7 +45,10 @@ export function WalletProvider({ children }) {
 
     // Pick the BEST wallet: prefer external (MetaMask, Coinbase, etc.) over embedded
     const activeWallet = (() => {
-        if (!privy.authenticated || manualDisconnected || !wallets || wallets.length === 0) return null;
+        if (!privy.authenticated || manualDisconnected || isDisconnecting || !wallets || wallets.length === 0) return null;
+        if (selectedWallet && selectedWallet.address) {
+            return selectedWallet;
+        }
         // Find the first external (injected) wallet
         const external = wallets.find(w =>
             w.walletClientType === 'metamask' ||
@@ -58,22 +63,41 @@ export function WalletProvider({ children }) {
     })();
 
     const account = activeWallet?.address || null;
+    const activeWalletKey = activeWallet
+        ? `${activeWallet.address || ''}:${activeWallet.walletClientType || activeWallet.connectorType || ''}`
+        : null;
     const isConnecting = !privy.ready;
     const isMonad = chainId === MONAD_CHAIN_ID;
 
     // Fetch balance from Monad RPC
     const fetchBalance = useCallback(async (addr) => {
         if (!addr) { setBalance(null); return; }
+        const walletAddress = String(addr);
         try {
             const rpc = getRpcProvider();
-            const bal = await rpc.getBalance(addr);
+            const bal = await rpc.getBalance(walletAddress);
             const formatted = formatEther(bal);
             setBalance(formatted);
+            return;
         } catch (err) {
             console.warn('[Wallet] Balance fetch error:', err.message);
-            // Keep previous value on transient RPC errors instead of showing incorrect 0.
         }
-    }, []);
+
+        // Fallback to the connected wallet provider if public RPC is unavailable.
+        try {
+            if (!activeWallet) return;
+            const ethProvider = await activeWallet.getEthereumProvider();
+            const rawBalance = await ethProvider.request({
+                method: 'eth_getBalance',
+                params: [walletAddress, 'latest'],
+            });
+            const wei = typeof rawBalance === 'string' ? BigInt(rawBalance) : 0n;
+            setBalance(formatEther(wei));
+        } catch (fallbackErr) {
+            console.warn('[Wallet] Balance fallback error:', fallbackErr.message);
+            // Keep previous value on transient errors instead of showing incorrect 0.
+        }
+    }, [activeWallet]);
 
     // Switch to Monad network
     const switchToMonad = useCallback(async () => {
@@ -144,6 +168,7 @@ export function WalletProvider({ children }) {
 
                 // Fetch balance immediately
                 if (activeWallet.address) {
+                    setBalance(null);
                     await fetchBalance(activeWallet.address);
                 }
 
@@ -182,18 +207,20 @@ export function WalletProvider({ children }) {
                 ethProviderRef.removeListener('accountsChanged', onAccountsChanged);
             }
         };
-    }, [activeWallet?.address, fetchBalance]);
+    }, [activeWallet, activeWalletKey, fetchBalance]);
 
     // Refresh balance periodically (every 15 seconds)
     useEffect(() => {
         if (!account) return;
+        fetchBalance(account);
         const interval = setInterval(() => fetchBalance(account), 15000);
         return () => clearInterval(interval);
-    }, [account, fetchBalance]);
+    }, [account, fetchBalance, activeWallet]);
 
     // Connect (opens Privy login modal — wallet only)
     const connect = useCallback(() => {
         setError(null);
+        setIsDisconnecting(false);
         setManualDisconnected(false);
         if (typeof window !== 'undefined') {
             window.sessionStorage.removeItem(MANUAL_DISCONNECT_KEY);
@@ -203,6 +230,7 @@ export function WalletProvider({ children }) {
 
     // Disconnect — fully clear session
     const disconnect = useCallback(async () => {
+        setIsDisconnecting(true);
         setManualDisconnected(true);
         if (typeof window !== 'undefined') {
             window.sessionStorage.setItem(MANUAL_DISCONNECT_KEY, '1');
@@ -225,6 +253,8 @@ export function WalletProvider({ children }) {
             await privy.logout();
         } catch (err) {
             console.warn('[Wallet] Disconnect error:', err.message);
+        } finally {
+            setIsDisconnecting(false);
         }
     }, [privy, wallets]);
 
@@ -244,6 +274,7 @@ export function WalletProvider({ children }) {
         chainId,
         isMonad,
         isConnecting,
+        isDisconnecting,
         isInstalled: true,
         walletType: activeWallet?.walletClientType || null,
         error,

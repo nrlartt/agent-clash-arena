@@ -101,17 +101,29 @@ class JsonDatabase {
 
     // ── Matches ─────────────────────────────────────────────
     getMatches() { return this.data.matches; }
-    getMatchById(id) { return this.data.matches.find(m => m.id === id); }
-    getLiveMatches() { return this.data.matches.filter(m => m.status === 'live'); }
+    getMatchById(id) { return this.data.matches.find(m => String(m.id || m.matchId) === String(id)); }
+    getLiveMatches() {
+        const activeStatuses = new Set(['live', 'betting', 'fighting', 'upcoming']);
+        return this.data.matches.filter(m => activeStatuses.has(String(m.status || '').toLowerCase()));
+    }
 
     addMatch(match) {
-        this.data.matches.push(match);
+        const key = String(match.id || match.matchId || '');
+        const idx = this.data.matches.findIndex(m => String(m.id || m.matchId || '') === key);
+        if (idx === -1) {
+            this.data.matches.push(match);
+        } else {
+            this.data.matches[idx] = {
+                ...this.data.matches[idx],
+                ...match,
+            };
+        }
         this._save();
         return match;
     }
 
     updateMatch(id, updates) {
-        const idx = this.data.matches.findIndex(m => m.id === id);
+        const idx = this.data.matches.findIndex(m => String(m.id || m.matchId) === String(id));
         if (idx === -1) return null;
         this.data.matches[idx] = { ...this.data.matches[idx], ...updates };
         this._save();
@@ -119,14 +131,26 @@ class JsonDatabase {
     }
 
     removeMatch(id) {
-        this.data.matches = this.data.matches.filter(m => m.id !== id);
+        this.data.matches = this.data.matches.filter(m => String(m.id || m.matchId) !== String(id));
         this._save();
     }
 
     // ── Match History ───────────────────────────────────────
     addMatchHistory(entry) {
-        this.data.matchHistory.unshift(entry);
-        if (this.data.matchHistory.length > 100) this.data.matchHistory.pop();
+        const key = String(entry.id || entry.matchId || '');
+        const idx = this.data.matchHistory.findIndex(h => String(h.id || h.matchId || '') === key);
+        if (idx === -1) {
+            this.data.matchHistory.unshift(entry);
+        } else {
+            this.data.matchHistory[idx] = { ...this.data.matchHistory[idx], ...entry };
+        }
+        this.data.matchHistory.sort((a, b) =>
+            Number(b.timestamp || b.completedAt || b.finishedAt || b.createdAt || 0)
+            - Number(a.timestamp || a.completedAt || a.finishedAt || a.createdAt || 0)
+        );
+        if (this.data.matchHistory.length > 200) {
+            this.data.matchHistory = this.data.matchHistory.slice(0, 200);
+        }
         this._save();
         return entry;
     }
@@ -134,16 +158,22 @@ class JsonDatabase {
     getMatchHistory(limit = 20) { return this.data.matchHistory.slice(0, limit); }
 
     // ── Bets ────────────────────────────────────────────────
-    getBetsForMatch(matchId) { return this.data.bets.filter(b => b.matchId === matchId); }
+    getBetsForMatch(matchId) { return this.data.bets.filter(b => String(b.matchId) === String(matchId)); }
 
     addBet(bet) {
-        this.data.bets.push(bet);
+        const key = String(bet.id || '');
+        const idx = this.data.bets.findIndex(b => String(b.id || '') === key);
+        if (idx === -1) {
+            this.data.bets.push(bet);
+        } else {
+            this.data.bets[idx] = { ...this.data.bets[idx], ...bet };
+        }
         this._save();
         return bet;
     }
 
     updateBet(id, updates) {
-        const idx = this.data.bets.findIndex(b => b.id === id);
+        const idx = this.data.bets.findIndex(b => String(b.id || '') === String(id));
         if (idx === -1) return null;
         this.data.bets[idx] = { ...this.data.bets[idx], ...updates };
         this._save();
@@ -153,9 +183,34 @@ class JsonDatabase {
     getBetsByWallet(walletAddress, limit = 50) {
         const addr = String(walletAddress || '').toLowerCase();
         return this.data.bets
-            .filter(b => String(b.walletAddress || '').toLowerCase() === addr)
+            .filter(b =>
+                String(b.walletAddress || '').toLowerCase() === addr
+                || String(b.bettor || '').toLowerCase() === addr
+            )
             .slice(-limit)
             .reverse();
+    }
+
+    getBetStats() {
+        const totalCount = this.data.bets.length;
+        const totalVolume = this.data.bets.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const todayTs = startOfDay.getTime();
+
+        const today = this.data.bets.filter((b) => {
+            const ts = Number(b.placedAt || b.createdAt || b.timestamp || 0);
+            return ts >= todayTs;
+        });
+        const todayCount = today.length;
+        const todayVolume = today.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+
+        return {
+            totalCount,
+            totalVolume: Number(totalVolume.toFixed(6)),
+            todayCount,
+            todayVolume: Number(todayVolume.toFixed(6)),
+        };
     }
 
     // ── Activity Feed ───────────────────────────────────────

@@ -60,6 +60,14 @@ const BETTING_DURATION = 30000;    // 30s betting window
 const FIGHT_DURATION = 195000;     // 195s fight (3 rounds × 60s + pauses + buffer)
 const RESULT_DURATION = 6000;      // 6s show result
 const COOLDOWN_DURATION = 3000;    // 3s between matches
+const ALLOW_SIMULATED_MATCH_FALLBACK = process.env.ALLOW_SIMULATED_MATCH_FALLBACK !== 'false';
+
+function toTimestamp(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value instanceof Date) return value.getTime();
+    const parsed = Date.parse(String(value || ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+}
 
 class AutoMatchmaker {
     constructor(io) {
@@ -76,7 +84,13 @@ class AutoMatchmaker {
 
     start() {
         logger.info('[AutoMatchmaker] Starting automatic match cycle');
-        this._safeNextMatch();
+        this._bootstrapHistory()
+            .catch((err) => logger.warn('[AutoMatchmaker] Failed to bootstrap history', { error: err.message }))
+            .then(() => this._restoreOrStartLiveMatch())
+            .catch((err) => {
+                logger.warn('[AutoMatchmaker] Could not restore live match state; starting fresh', { error: err.message });
+                this._safeNextMatch();
+            });
     }
 
     async _safeNextMatch() {
@@ -97,11 +111,169 @@ class AutoMatchmaker {
     }
 
     getState() {
+        const now = Date.now();
+        const phaseTimeLeft = this.currentMatch?.phaseEndsAt
+            ? Math.max(0, Math.ceil((toTimestamp(this.currentMatch.phaseEndsAt) - now) / 1000))
+            : this.bettingTimeLeft;
+
         return {
             phase: this.phase,
             match: this.currentMatch,
-            bettingTimeLeft: this.bettingTimeLeft,
+            bettingTimeLeft: phaseTimeLeft,
             matchHistory: this.matchHistory.slice(0, 10),
+        };
+    }
+
+    async _restoreOrStartLiveMatch() {
+        if (typeof db.getLiveMatches !== 'function') {
+            this._safeNextMatch();
+            return;
+        }
+
+        const liveMatches = await db.getLiveMatches();
+        if (!Array.isArray(liveMatches) || liveMatches.length === 0) {
+            this._safeNextMatch();
+            return;
+        }
+
+        const candidate = [...liveMatches]
+            .filter((m) => ['betting', 'fighting', 'live'].includes(String(m.status || '').toLowerCase()))
+            .sort((a, b) => toTimestamp(b.createdAt || b.timestamp || b.updatedAt) - toTimestamp(a.createdAt || a.timestamp || a.updatedAt))[0];
+
+        if (!candidate) {
+            this._safeNextMatch();
+            return;
+        }
+
+        const restoredMatch = this._normalizeRestoredMatch(candidate);
+        if (!restoredMatch) {
+            this._safeNextMatch();
+            return;
+        }
+
+        this.currentMatch = restoredMatch;
+        const status = String(candidate.status || 'betting').toLowerCase();
+        const now = Date.now();
+        const savedPhaseEnd = toTimestamp(candidate.phaseEndsAt);
+
+        if (status === 'betting') {
+            this.phase = 'BETTING';
+            this.currentMatch.status = 'betting';
+            this.currentMatch.phaseStartedAt = toTimestamp(candidate.phaseStartedAt || candidate.createdAt || now);
+            this.currentMatch.phaseEndsAt = savedPhaseEnd > now ? savedPhaseEnd : (now + BETTING_DURATION);
+            this.bettingTimeLeft = Math.max(0, Math.ceil((this.currentMatch.phaseEndsAt - now) / 1000));
+            this.io.emit('match:new', this.currentMatch);
+            this.io.emit('match:phase', { phase: 'BETTING', match: this.currentMatch, timeLeft: this.bettingTimeLeft });
+            this._startBettingCountdown();
+            logger.info('[AutoMatchmaker] Restored betting phase from DB', {
+                matchId: this.currentMatch.id,
+                timeLeft: this.bettingTimeLeft,
+            });
+            return;
+        }
+
+        this.phase = 'FIGHTING';
+        this.currentMatch.status = 'fighting';
+        this.currentMatch.phaseStartedAt = toTimestamp(candidate.phaseStartedAt || candidate.createdAt || now);
+        this.currentMatch.phaseEndsAt = savedPhaseEnd > now ? savedPhaseEnd : (now + 5000);
+        this.io.emit('match:new', this.currentMatch);
+        this._startFight({ restored: true });
+        logger.info('[AutoMatchmaker] Restored fighting phase from DB', { matchId: this.currentMatch.id });
+    }
+
+    _normalizeRestoredMatch(match) {
+        const matchKey = match?.id || match?.matchId;
+        if (!match || !matchKey || !match.agent1 || !match.agent2) return null;
+
+        return {
+            id: String(matchKey),
+            agent1: this._formatAgent(match.agent1),
+            agent2: this._formatAgent(match.agent2),
+            status: String(match.status || 'betting'),
+            agent1Bets: Number(match.agent1Bets || 0),
+            agent2Bets: Number(match.agent2Bets || 0),
+            totalBets: Number(match.totalBets || 0),
+            agent1Odds: Number(match.agent1Odds || 2.0),
+            agent2Odds: Number(match.agent2Odds || 2.0),
+            bets: Array.isArray(match.bets) ? match.bets : [],
+            createdAt: toTimestamp(match.createdAt || Date.now()),
+            isSimulated: !!match.isSimulated,
+            hasRealAgent: !!match.hasRealAgent,
+            onChain: !!match.onChain,
+            onChainTxHash: match.onChainTxHash || null,
+            phaseStartedAt: toTimestamp(match.phaseStartedAt || Date.now()),
+            phaseEndsAt: toTimestamp(match.phaseEndsAt || Date.now()),
+        };
+    }
+
+    _startBettingCountdown() {
+        clearInterval(this.bettingInterval);
+        this.bettingInterval = setInterval(() => {
+            if (!this.currentMatch || this.phase !== 'BETTING') {
+                clearInterval(this.bettingInterval);
+                return;
+            }
+
+            const now = Date.now();
+            this.bettingTimeLeft = Math.max(0, Math.ceil((toTimestamp(this.currentMatch.phaseEndsAt) - now) / 1000));
+            this.io.emit('match:timer', { timeLeft: this.bettingTimeLeft });
+
+            if (this.bettingTimeLeft <= 0) {
+                clearInterval(this.bettingInterval);
+                this._startFight();
+            }
+        }, 1000);
+    }
+
+    async _persistCurrentMatch() {
+        if (!this.currentMatch || typeof db.addMatch !== 'function') return;
+        try {
+            await db.addMatch({
+                ...this.currentMatch,
+                id: this.currentMatch.id,
+                matchId: this.currentMatch.id,
+                updatedAt: Date.now(),
+            });
+        } catch (err) {
+            logger.warn('[AutoMatchmaker] Failed to persist current match', { error: err.message });
+        }
+    }
+
+    async _bootstrapHistory() {
+        if (typeof db.getMatchHistory !== 'function') return;
+        const history = await db.getMatchHistory(20);
+        if (!Array.isArray(history) || history.length === 0) return;
+
+        const normalized = history
+            .map((h) => ({
+                matchId: h.matchId || h.id || null,
+                winnerId: h.winnerId || null,
+                winner: h.winner || (h.winnerName ? { name: h.winnerName, avatar: 'ðŸ†', color: '#FFE93E' } : null),
+                loser: h.loser || (h.loserName ? { name: h.loserName, avatar: 'âš”ï¸', color: '#888888' } : null),
+                method: h.method || 'Decision',
+                duration: h.duration || 0,
+                monEarned: Number(h.monEarned || 0),
+                totalBets: Number(h.totalBets || 0),
+                timestamp: Number(h.timestamp || h.completedAt || h.finishedAt || h.createdAt || Date.now()),
+                hasRealAgent: !!h.hasRealAgent,
+            }))
+            .filter((h) => h.matchId && h.winner && h.loser)
+            .slice(0, 20);
+
+        if (normalized.length > 0) {
+            this.matchHistory = normalized;
+            logger.info(`[AutoMatchmaker] Loaded ${normalized.length} historical matches from DB`);
+        }
+    }
+
+    getLiveMetrics() {
+        return {
+            phase: this.phase,
+            activeBetsPool: Number(this.currentMatch?.totalBets || 0),
+            bettingTimeLeft: this.bettingTimeLeft,
+            currentMatchId: this.currentMatch?.id || null,
+            onChainLiveMatch: !!this.currentMatch?.onChain,
+            recentResults: this.matchHistory.slice(0, 10),
         };
     }
 
@@ -180,7 +352,11 @@ class AutoMatchmaker {
             hasRealAgent,
             onChain: false,
             onChainTxHash: null,
+            phaseStartedAt: Date.now(),
+            phaseEndsAt: Date.now() + BETTING_DURATION,
         };
+
+        this._persistCurrentMatch();
 
         // Try to create match on-chain (NON-BLOCKING)
         blockchain.createMatchOnChain(matchId, agent1.name, agent2.name)
@@ -194,6 +370,7 @@ class AutoMatchmaker {
                 this.currentMatch.onChain = true;
                 this.currentMatch.onChainTxHash = txHash;
                 this.io.emit('match:update', this.currentMatch);
+                this._persistCurrentMatch();
                 logger.info(`[AutoMatchmaker] Match ${matchId} created on-chain`, { txHash });
             })
             .catch(err => {
@@ -202,29 +379,47 @@ class AutoMatchmaker {
 
         // Start BETTING phase
         this.phase = 'BETTING';
-        this.bettingTimeLeft = Math.floor(BETTING_DURATION / 1000);
+        this.bettingTimeLeft = Math.ceil(BETTING_DURATION / 1000);
 
         this.io.emit('match:new', this.currentMatch);
         this.io.emit('match:phase', { phase: 'BETTING', match: this.currentMatch, timeLeft: this.bettingTimeLeft });
+        this.io.emit('arena:live_event', {
+            type: 'match_start',
+            icon: 'âš”ï¸',
+            text: `${agent1.name} vs ${agent2.name} started (${hasRealAgent ? 'REAL' : 'SIM'})`,
+            color: '#00F5FF',
+            timestamp: Date.now(),
+        });
+
+        Promise.resolve(db.addActivity({
+            type: 'match_start',
+            message: `${agent1.name} vs ${agent2.name} started (${hasRealAgent ? 'REAL' : 'SIM'})`,
+            time: Date.now(),
+            icon: 'âš”ï¸',
+        })).catch((err) => logger.warn('[AutoMatchmaker] Could not persist match_start activity', { error: err.message }));
 
         const realLabel = hasRealAgent ? ' [REAL AGENTS]' : ' [SIM]';
         logger.info(`[AutoMatchmaker] New match: ${agent1.name} vs ${agent2.name} (${matchId})${realLabel}`);
 
         // Countdown timer
-        this.bettingInterval = setInterval(() => {
-            this.bettingTimeLeft--;
-            this.io.emit('match:timer', { timeLeft: this.bettingTimeLeft });
-
-            if (this.bettingTimeLeft <= 0) {
-                clearInterval(this.bettingInterval);
-                this._startFight();
-            }
-        }, 1000);
+        this._startBettingCountdown();
     }
 
-    _startFight() {
+    _startFight({ restored = false } = {}) {
+        if (!this.currentMatch) return;
+
         this.phase = 'FIGHTING';
         this.currentMatch.status = 'fighting';
+        const now = Date.now();
+        const fallbackEnd = now + FIGHT_DURATION;
+        this.currentMatch.phaseStartedAt = restored ? toTimestamp(this.currentMatch.phaseStartedAt || now) : now;
+        this.currentMatch.phaseEndsAt = restored
+            ? toTimestamp(this.currentMatch.phaseEndsAt || fallbackEnd)
+            : fallbackEnd;
+        if (this.currentMatch.phaseEndsAt <= now) {
+            this.currentMatch.phaseEndsAt = now + 1000;
+        }
+        this._persistCurrentMatch();
 
         // Lock match on-chain (no more bets)
         if (this.currentMatch.onChain) {
@@ -233,31 +428,45 @@ class AutoMatchmaker {
             });
         }
 
-        this.io.emit('match:phase', { phase: 'FIGHTING', match: this.currentMatch });
+        this.io.emit('match:phase', {
+            phase: 'FIGHTING',
+            match: this.currentMatch,
+            timeLeft: Math.max(0, Math.ceil((this.currentMatch.phaseEndsAt - now) / 1000)),
+        });
+        if (!restored) this.io.emit('arena:live_event', {
+            type: 'fight_start',
+            icon: 'ðŸ¥Š',
+            text: `Fight started: ${this.currentMatch.agent1.name} vs ${this.currentMatch.agent2.name}`,
+            color: '#FF6B35',
+            timestamp: Date.now(),
+        });
 
         // Simulate fight events during the fight
-        const fightEvents = this._generateFightEvents();
+        const fightEvents = restored ? [] : this._generateFightEvents();
         fightEvents.forEach((event) => {
             setTimeout(() => {
                 try {
                     this.io.emit('match:fight_event', event);
-                } catch (e) { /* ignore */ }
+                } catch { /* ignore */ }
             }, event.delay);
         });
 
         // End fight after duration
+        const remaining = Math.max(1000, this.currentMatch.phaseEndsAt - now);
         this.phaseTimer = setTimeout(() => {
             this._endFight().catch(err => {
                 logger.error('[AutoMatchmaker] _endFight crashed, forcing next match', { error: err.message });
                 this._scheduleNextMatch();
             });
-        }, FIGHT_DURATION);
+        }, remaining);
     }
 
     _scheduleNextMatch() {
         clearTimeout(this.phaseTimer);
+        clearInterval(this.bettingInterval);
         this.phase = 'COOLDOWN';
-        try { this.io.emit('match:phase', { phase: 'COOLDOWN' }); } catch (e) { /* ignore */ }
+        this.bettingTimeLeft = 0;
+        try { this.io.emit('match:phase', { phase: 'COOLDOWN' }); } catch { /* ignore */ }
         logger.info('[AutoMatchmaker] Scheduling next match in cooldown');
         this.phaseTimer = setTimeout(() => {
             this._safeNextMatch();
@@ -307,6 +516,27 @@ class AutoMatchmaker {
             timestamp: Date.now(),
             hasRealAgent: this.currentMatch.hasRealAgent,
         };
+
+        try {
+            await db.addMatchHistory({
+                id: `hist-${this.currentMatch.id}`,
+                matchId: this.currentMatch.id,
+                winnerId,
+                winner: result.winner,
+                loser: result.loser,
+                winnerName: winner.name,
+                loserName: loser.name,
+                method,
+                duration: result.duration,
+                monEarned,
+                totalBets: this.currentMatch.totalBets,
+                timestamp: Date.now(),
+                completedAt: Date.now(),
+                hasRealAgent: this.currentMatch.hasRealAgent,
+            });
+        } catch (err) {
+            logger.warn('[AutoMatchmaker] Failed to persist match history', { error: err.message });
+        }
 
         // ── Update REAL agent stats in database ──────────────
         if (winner.isReal && winner.dbId) {
@@ -404,6 +634,9 @@ class AutoMatchmaker {
         this.phase = 'RESULT';
         this.currentMatch.status = 'finished';
         this.currentMatch.result = result;
+        this.currentMatch.phaseEndsAt = Date.now();
+        this.currentMatch.completedAt = Date.now();
+        await this._persistCurrentMatch();
 
         this.matchHistory.unshift(result);
         if (this.matchHistory.length > 20) this.matchHistory.pop();
@@ -411,6 +644,13 @@ class AutoMatchmaker {
         try {
             this.io.emit('match:phase', { phase: 'RESULT', match: this.currentMatch, result });
             this.io.emit('match:result', result);
+            this.io.emit('arena:live_event', {
+                type: 'match_end',
+                icon: 'ðŸ†',
+                text: `${winner.name} defeated ${loser.name}. Pool: ${this.currentMatch.totalBets.toFixed(2)} MON`,
+                color: winner.color,
+                timestamp: Date.now(),
+            });
         } catch (err) {
             logger.error('[AutoMatchmaker] Failed to emit result', { error: err.message });
         }
@@ -448,6 +688,10 @@ class AutoMatchmaker {
         }
 
         // No real agents — use sim agents
+        if (!ALLOW_SIMULATED_MATCH_FALLBACK) {
+            throw new Error('Not enough active real agents for live matches and simulated fallback is disabled');
+        }
+
         const shuffled = [...SIM_AGENTS].sort(() => Math.random() - 0.5);
         return [shuffled[0], shuffled[1]];
     }
@@ -524,10 +768,31 @@ class AutoMatchmaker {
         return events.sort((a, b) => a.delay - b.delay);
     }
 
-    recordBet(side, amount, address) {
+    async recordBet(side, amount, address, meta = {}) {
         if (!this.currentMatch || this.phase !== 'BETTING') return null;
 
-        const bet = { side, amount: parseFloat(amount), address, timestamp: Date.now() };
+        const numericAmount = parseFloat(amount);
+        if (!Number.isFinite(numericAmount) || numericAmount <= 0) return null;
+        const normalizedAddress = String(address || '').toLowerCase();
+        const normalizedTxHash = meta.txHash ? String(meta.txHash).toLowerCase() : null;
+
+        if (normalizedTxHash && this.currentMatch.bets.some((b) => String(b.txHash || '').toLowerCase() === normalizedTxHash)) {
+            return null;
+        }
+        if (!normalizedTxHash && normalizedAddress && this.currentMatch.bets.some((b) => String(b.address || '').toLowerCase() === normalizedAddress)) {
+            return null;
+        }
+
+        const bet = {
+            id: `bet-${uuidv4().slice(0, 8)}`,
+            side,
+            amount: numericAmount,
+            address,
+            txHash: meta.txHash || null,
+            onChain: !!meta.onChain,
+            verifiedAt: meta.verifiedAt || Date.now(),
+            timestamp: Date.now(),
+        };
         this.currentMatch.bets.push(bet);
 
         if (side === '1') {
@@ -544,7 +809,43 @@ class AutoMatchmaker {
             this.currentMatch.agent2Odds = parseFloat((total / this.currentMatch.agent2Bets).toFixed(2));
         }
 
+        const selectedAgent = side === '1' ? this.currentMatch.agent1 : this.currentMatch.agent2;
+        const short = address ? `${String(address).slice(0, 6)}...${String(address).slice(-4)}` : 'anonymous';
+
+        this.io.emit('arena:live_event', {
+            type: 'bet',
+            icon: 'ðŸ’°',
+            text: `${short} bet ${numericAmount} MON on ${selectedAgent.name}`,
+            color: '#FFE93E',
+            timestamp: Date.now(),
+        });
+
+        if (typeof db.addBet === 'function') {
+            Promise.resolve(db.addBet({
+                id: bet.id,
+                matchId: this.currentMatch.id,
+                agentId: selectedAgent.id,
+                walletAddress: address,
+                amount: numericAmount,
+                odds: side === '1' ? this.currentMatch.agent1Odds : this.currentMatch.agent2Odds,
+                status: 'pending',
+                txHash: bet.txHash,
+                onChain: bet.onChain,
+                placedAt: Date.now(),
+            })).catch((err) => logger.warn('[AutoMatchmaker] Failed to persist bet', { error: err.message }));
+        }
+
+        if (typeof db.addActivity === 'function') {
+            Promise.resolve(db.addActivity({
+                type: 'bet',
+                message: `${short} bet ${numericAmount} MON on ${selectedAgent.name}`,
+                time: Date.now(),
+                icon: 'ðŸ’°',
+            })).catch((err) => logger.warn('[AutoMatchmaker] Failed to persist bet activity', { error: err.message }));
+        }
+
         this.io.emit('match:update', this.currentMatch);
+        this._persistCurrentMatch();
         return bet;
     }
 }

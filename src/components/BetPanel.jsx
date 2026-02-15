@@ -2,20 +2,23 @@
 // BET PANEL v2 — Boxing Match Betting Interface
 // ═══════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { ethers } from 'ethers';
+import { useState, useEffect, useRef } from 'react';
 import { Zap, TrendingUp, Lock, ArrowRight, AlertTriangle, Trophy, Flame, CheckCircle, XCircle } from 'lucide-react';
 import { playSound } from '../utils/audio';
 import { useWallet } from '../context/WalletContext';
 import contractService, { BetSide } from '../services/contractService';
 import './BetPanel.css';
 
-// Treasury address for direct MON bets (when contract not available)
-const TREASURY_ADDRESS = import.meta.env.VITE_TREASURY_ADDRESS || '0xe0A0e9A6E17cF929b2648D6E8EAa516F357F87eA';
-
 const QUICK_AMOUNTS = [1, 5, 10, 25, 50];
 
-export default function BetPanel({ match, walletConnected = false, disabled = false, timer = null, onBetPlaced = null }) {
+export default function BetPanel({
+    match,
+    walletConnected = false,
+    liveConnected = true,
+    disabled = false,
+    timer = null,
+    onBetPlaced = null,
+}) {
     const [selectedSide, setSelectedSide] = useState(null);
     const [betAmount, setBetAmount] = useState('');
     const [isPlacing, setIsPlacing] = useState(false);
@@ -25,7 +28,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
     const [showWinPreview, setShowWinPreview] = useState(false);
     const [contractReady, setContractReady] = useState(false);
     const prevTimer = useRef(timer);
-    const { provider, isMonad, account } = useWallet();
+    const { provider, isMonad, account, fetchBalance } = useWallet();
 
     // Initialize contract when wallet connects
     useEffect(() => {
@@ -94,17 +97,6 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
         playSound('tick');
     };
 
-    // Send MON directly to treasury (wallet popup guaranteed)
-    const sendDirectBet = async (walletProvider, amountMON) => {
-        const signer = await walletProvider.getSigner();
-        const tx = await signer.sendTransaction({
-            to: TREASURY_ADDRESS,
-            value: ethers.parseEther(amountMON),
-        });
-        const receipt = await tx.wait();
-        return receipt.hash;
-    };
-
     const handlePlaceBet = async () => {
         if (disabled || !selectedSide || !betAmount || parseFloat(betAmount) <= 0) return;
 
@@ -112,6 +104,11 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
         if (!walletConnected) {
             setBetStatus('error');
             setBetMessage('Please connect your wallet first.');
+            return;
+        }
+        if (!liveConnected) {
+            setBetStatus('error');
+            setBetMessage('Live arena connection is offline. Please retry in a moment.');
             return;
         }
         if (!isMonad) {
@@ -128,45 +125,41 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
 
         try {
             const matchId = match.id || match.matchId || 'match-0';
-            const isOnChain = Boolean(match.onChain && match.onChainTxHash && contractReady);
+            const isOnChainMatch = Boolean(match.onChain && match.onChainTxHash);
 
-            if (isOnChain) {
-                // ON-CHAIN: Smart contract bet — opens wallet for approval
-                try {
-                    const side = selectedSide === '1' ? BetSide.AgentA : BetSide.AgentB;
-                    const result = await contractService.placeBet(matchId, side, betAmount);
-                    setTxHash(result.txHash);
-                    setBetStatus('success');
-                    setBetMessage(`On-chain bet placed! TX: ${result.txHash.slice(0, 10)}...`);
-                } catch (chainErr) {
-                    if (chainErr.code === 'ACTION_REJECTED' || chainErr.code === 4001) {
-                        throw chainErr;
-                    }
-                    // Fallback to direct transfer
-                    console.warn('[BetPanel] Contract bet failed, trying direct transfer:', chainErr.message);
-                    const txHash = await sendDirectBet(provider, betAmount);
-                    setTxHash(txHash);
-                    setBetStatus('success');
-                    setBetMessage(`Bet placed! TX: ${txHash.slice(0, 10)}...`);
-                }
-            } else if (provider) {
-                // No on-chain match — send MON directly to treasury (ALWAYS triggers wallet popup)
-                const txHash = await sendDirectBet(provider, betAmount);
-                setTxHash(txHash);
-                setBetStatus('success');
-                setBetMessage(`Bet placed on Monad! TX: ${txHash.slice(0, 10)}...`);
-            } else {
-                throw new Error('Wallet provider not available. Please reconnect.');
+            if (!isOnChainMatch) {
+                throw new Error('Match is not ready on-chain yet. Wait for the next on-chain round.');
+            }
+            if (!contractReady) {
+                throw new Error('Contract is not ready. Reconnect wallet and try again.');
             }
 
-            // Notify parent (Arena) to send bet to backend via Socket.IO
+            const side = selectedSide === '1' ? BetSide.AgentA : BetSide.AgentB;
+            const result = await contractService.placeBet(matchId, side, betAmount);
+            setTxHash(result.txHash);
+
+            // Notify parent (Arena) and wait for backend confirmation.
             if (onBetPlaced) {
-                onBetPlaced({ side: selectedSide, amount: betAmount, address: account || '' });
+                const confirmation = await onBetPlaced({
+                    side: selectedSide,
+                    amount: betAmount,
+                    address: account || '',
+                    txHash: result.txHash,
+                    onChain: true,
+                });
+
+                if (confirmation && confirmation.ok === false) {
+                    throw new Error(confirmation.error || 'Bet rejected by live arena');
+                }
             }
+
+            setBetStatus('success');
+            setBetMessage(`On-chain bet placed! TX: ${result.txHash.slice(0, 10)}...`);
 
             playSound('cheer');
             setBetAmount('');
             setSelectedSide(null);
+            if (fetchBalance) fetchBalance();
         } catch (err) {
             console.error('[BetPanel] placeBet error:', err);
             setBetStatus('error');
@@ -389,7 +382,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
             {/* Disclaimer */}
             <div className="bet-panel__disclaimer">
                 <AlertTriangle size={11} />
-                <span>Bets are final. Rewards via smart contract on Monad.{!contractReady && walletConnected ? ' (Off-chain mode)' : ''}</span>
+                <span>Bets are final. Rewards are settled via smart contract on Monad.</span>
             </div>
         </div>
     );

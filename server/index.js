@@ -10,6 +10,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const { ethers } = require('ethers');
 const db = require('./db');
 const logger = require('./utils/logger');
 const { initSentry, setupSentryErrorHandler } = require('./utils/sentry');
@@ -180,8 +181,9 @@ app.get('/api/v1/stats', async (_req, res) => {
     const platformEconomy = typeof db.getPlatformEconomy === 'function'
         ? db.getPlatformEconomy()
         : { treasuryMON: 0, totalPaidToAgents: 0, totalPaidToBettors: 0 };
-
-    const totalBets = db.data.bets.reduce((sum, b) => sum + b.amount, 0);
+    const betStats = typeof db.getBetStats === 'function'
+        ? await db.getBetStats()
+        : { totalCount: 0, totalVolume: 0 };
     const activeAgents = agents.filter(a => a.status !== 'pending_claim').length;
 
     res.json({
@@ -191,12 +193,12 @@ app.get('/api/v1/stats', async (_req, res) => {
             activeAgents,
             liveMatches: liveMatches.length,
             totalMatchesPlayed: history.length,
-            totalBetsPlaced: db.data.bets.length,
-            totalMONWagered: totalBets,
+            totalBetsPlaced: Number(betStats.totalCount || 0),
+            totalMONWagered: Number(betStats.totalVolume || 0),
             payoutTreasuryMON: platformEconomy.treasuryMON,
             totalPaidToAgentsMON: platformEconomy.totalPaidToAgents,
             totalPaidToBettorsMON: platformEconomy.totalPaidToBettors,
-            onlineViewers: 1800 + Math.floor(Math.random() * 200),
+            onlineViewers: io.engine.clientsCount || 0,
         },
     });
 });
@@ -254,20 +256,28 @@ app.get('/skill.md', (req, res) => {
 });
 
 // ── REST endpoints for arena live data ──────────────────────
-app.get('/api/v1/arena/live-stats', (_req, res) => {
-    res.json({
-        success: true,
-        data: {
-            ...liveArenaState,
-            agents: ARENA_AGENTS,
-        },
-    });
+app.get('/api/v1/arena/live-stats', async (_req, res) => {
+    const stats = await buildLiveStats();
+    res.json({ success: true, data: stats });
 });
 
 app.get('/api/v1/arena/recent-results', (_req, res) => {
+    const live = matchmaker.getLiveMetrics();
     res.json({
         success: true,
-        data: liveArenaState.recentResults,
+        data: live.recentResults || [],
+    });
+});
+
+app.get('/api/v1/arena/current', (_req, res) => {
+    const state = matchmaker.getState();
+    res.json({
+        success: true,
+        data: {
+            phase: state.phase,
+            match: state.match,
+            timeLeft: state.bettingTimeLeft,
+        },
     });
 });
 
@@ -326,6 +336,129 @@ io.use((socket, next) => {
 // ── Auto Matchmaker (creates matches automatically) ──────────
 const AutoMatchmaker = require('./utils/auto-matchmaker');
 const matchmaker = new AutoMatchmaker(io);
+const BETTING_CONTRACT_ADDRESS = String(process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS || '').trim();
+const BETTING_RPC_URL = process.env.MONAD_RPC_URL || process.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
+const ONCHAIN_BETTING_REQUIRED = process.env.ONCHAIN_BETTING_REQUIRED !== 'false';
+const bettingTxProvider = BETTING_CONTRACT_ADDRESS ? new ethers.JsonRpcProvider(BETTING_RPC_URL) : null;
+const bettingInterface = new ethers.Interface(['function placeBet(bytes32 _matchId, uint8 _side)']);
+
+function toBytes32MatchId(matchId) {
+    return ethers.encodeBytes32String(String(matchId || '').slice(0, 31));
+}
+
+function shortAddress(address) {
+    if (!address || String(address).length < 10) return 'anonymous';
+    return `${String(address).slice(0, 6)}...${String(address).slice(-4)}`;
+}
+
+async function verifyOnchainBetTx({ txHash, matchId, side, address, amount }) {
+    if (!bettingTxProvider || !BETTING_CONTRACT_ADDRESS) {
+        throw new Error('On-chain betting backend is not configured');
+    }
+    if (!/^0x[a-fA-F0-9]{64}$/.test(String(txHash || ''))) {
+        throw new Error('Invalid tx hash format');
+    }
+
+    const [tx, receipt] = await Promise.all([
+        bettingTxProvider.getTransaction(txHash),
+        bettingTxProvider.getTransactionReceipt(txHash),
+    ]);
+
+    if (!tx) throw new Error('Transaction not found');
+    if (!receipt) throw new Error('Transaction not mined yet');
+    if (Number(receipt.status) !== 1) throw new Error('Transaction failed on-chain');
+
+    const to = String(tx.to || '').toLowerCase();
+    if (to !== BETTING_CONTRACT_ADDRESS.toLowerCase()) {
+        throw new Error('Transaction target does not match betting contract');
+    }
+
+    const from = String(tx.from || '').toLowerCase();
+    if (address && from !== String(address).toLowerCase()) {
+        throw new Error('Transaction sender does not match wallet address');
+    }
+
+    let parsed;
+    try {
+        parsed = bettingInterface.parseTransaction({ data: tx.data, value: tx.value });
+    } catch {
+        throw new Error('Could not decode betting transaction call');
+    }
+
+    if (!parsed || parsed.name !== 'placeBet') {
+        throw new Error('Transaction is not a placeBet call');
+    }
+
+    const expectedBytes32 = toBytes32MatchId(matchId);
+    const txMatchId = String(parsed.args[0] || '');
+    const txSide = Number(parsed.args[1] || 0);
+    const expectedSide = side === '1' ? 1 : 2;
+    if (txMatchId !== expectedBytes32) throw new Error('Transaction match id does not match live match');
+    if (txSide !== expectedSide) throw new Error('Transaction side does not match selected fighter');
+
+    const expectedWei = ethers.parseEther(String(amount));
+    if (tx.value < expectedWei) throw new Error('Transaction value is lower than bet amount');
+
+    return {
+        txHash: tx.hash,
+        blockNumber: receipt.blockNumber,
+        from: tx.from,
+        valueMON: Number(ethers.formatEther(tx.value)),
+        verifiedAt: Date.now(),
+    };
+}
+
+async function buildLiveStats() {
+    const viewers = io.engine.clientsCount || 0;
+    const live = matchmaker.getLiveMetrics();
+
+    let totalBetsToday = 0;
+    let matchesPlayedToday = 0;
+    let topAgents = [];
+
+    try {
+        if (typeof db.getBetStats === 'function') {
+            const betStats = await db.getBetStats();
+            totalBetsToday = Number(betStats.todayVolume || betStats.totalVolume || 0);
+        }
+        if (typeof db.getMatchHistory === 'function') {
+            const history = await db.getMatchHistory(200);
+            const start = new Date();
+            start.setHours(0, 0, 0, 0);
+            matchesPlayedToday = (history || []).filter((h) => {
+                const rawTs = h.completedAt || h.timestamp || h.finishedAt || h.createdAt || 0;
+                const ts = typeof rawTs === 'number' ? rawTs : Date.parse(String(rawTs));
+                return ts >= start.getTime();
+            }).length;
+        }
+        if (typeof db.getLeaderboard === 'function') {
+            const palette = ['#FF2D78', '#00F5FF', '#836EF9', '#FF6B35', '#69D2E7', '#FFE93E', '#9B59B6', '#2ECC71'];
+            const rawAgents = await db.getLeaderboard('winRate', 8);
+            topAgents = (rawAgents || []).map((agent, idx) => ({
+                id: String(agent.id || agent._id || `agent-${idx}`),
+                name: agent.name || `Agent ${idx + 1}`,
+                avatar: agent.avatar || '⚔️',
+                color: agent.color || palette[idx % palette.length],
+                wins: Number(agent.stats?.wins || agent.wins || 0),
+                winRate: Number(agent.stats?.winRate || agent.winRate || 0),
+            }));
+        }
+    } catch (err) {
+        logger.warn('Failed to build live stats from DB', { error: err.message });
+    }
+
+    return {
+        viewers,
+        totalBetsToday,
+        matchesPlayedToday,
+        activeBetsPool: live.activeBetsPool,
+        phase: live.phase,
+        bettingTimeLeft: live.bettingTimeLeft,
+        currentMatchId: live.currentMatchId,
+        onChainLiveMatch: live.onChainLiveMatch,
+        agents: topAgents,
+    };
+}
 
 io.on('connection', (socket) => {
     logger.info(`WS client connected`, { socketId: socket.id, authenticated: !!socket.authToken });
@@ -343,6 +476,10 @@ io.on('connection', (socket) => {
     if (state.matchHistory.length > 0) {
         socket.emit('match:history', state.matchHistory);
     }
+
+    buildLiveStats()
+        .then((stats) => socket.emit('arena:live_stats', stats))
+        .catch((err) => logger.warn('Failed to send initial live stats', { error: err.message }));
 
     // Join match room for live updates
     socket.on('match:watch', async (matchId) => {
@@ -363,13 +500,80 @@ io.on('connection', (socket) => {
         socket.leave(`match:${matchId}`);
     });
 
-    // Record bet from frontend
-    socket.on('match:bet', (data) => {
-        const { side, amount, address } = data || {};
-        if (!side || !amount) return;
-        const bet = matchmaker.recordBet(side, amount, address);
-        if (bet) {
-            logger.info(`Bet recorded: ${amount} MON on side ${side}`, { address, matchId: matchmaker.currentMatch?.id });
+    // Record bet from frontend (requires on-chain verification for live/on-chain matches)
+    socket.on('match:bet', async (data, callback) => {
+        const respond = (payload) => {
+            if (typeof callback === 'function') {
+                callback(payload);
+            }
+        };
+
+        const { side, amount, address, txHash } = data || {};
+        if (!side || !amount || !address) {
+            respond({ ok: false, error: 'Missing required bet fields' });
+            return;
+        }
+
+        const liveMatch = matchmaker.currentMatch;
+        if (!liveMatch || matchmaker.phase !== 'BETTING') {
+            const error = 'Betting window is closed';
+            socket.emit('bet:error', { error });
+            respond({ ok: false, error });
+            return;
+        }
+
+        try {
+            let verification = null;
+            if (liveMatch.onChain || ONCHAIN_BETTING_REQUIRED) {
+                if (!txHash) {
+                    throw new Error('On-chain tx hash is required');
+                }
+                verification = await verifyOnchainBetTx({
+                    txHash,
+                    matchId: liveMatch.id,
+                    side,
+                    address,
+                    amount,
+                });
+            }
+
+            const bet = await matchmaker.recordBet(side, amount, address, {
+                txHash: txHash || null,
+                onChain: !!verification,
+                verifiedAt: verification?.verifiedAt || Date.now(),
+            });
+
+            if (!bet) {
+                const error = 'Bet was rejected (duplicate or invalid)';
+                socket.emit('bet:error', { error });
+                respond({ ok: false, error });
+                return;
+            }
+
+            logger.info('Live bet recorded', {
+                matchId: liveMatch.id,
+                side,
+                amount,
+                address: shortAddress(address),
+                txHash: txHash || null,
+            });
+            respond({
+                ok: true,
+                betId: bet.id,
+                matchId: liveMatch.id,
+                txHash: txHash || null,
+            });
+        } catch (err) {
+            logger.warn('Bet rejected', {
+                error: err.message,
+                matchId: liveMatch?.id || null,
+                side,
+                amount,
+                address: shortAddress(address),
+                txHash: txHash || null,
+            });
+            socket.emit('bet:error', { error: err.message });
+            respond({ ok: false, error: err.message });
         }
     });
 
@@ -394,87 +598,12 @@ io.on('connection', (socket) => {
 });
 
 // ── Live Arena Simulation (Generates real-time events) ───────
-const ARENA_AGENTS = [
-    { id: 'a1', name: 'ShadowStrike', avatar: '🗡️', color: '#FF2D78', rank: 1, wins: 47, losses: 12, powerRating: 94 },
-    { id: 'a2', name: 'IronGuard', avatar: '🛡️', color: '#00F5FF', rank: 2, wins: 41, losses: 15, powerRating: 89 },
-    { id: 'a3', name: 'VoidWalker', avatar: '🌀', color: '#836EF9', rank: 3, wins: 38, losses: 18, powerRating: 87 },
-    { id: 'a4', name: 'PyroBlitz', avatar: '🔥', color: '#FF6B35', rank: 4, wins: 35, losses: 20, powerRating: 83 },
-    { id: 'a5', name: 'FrostByte', avatar: '❄️', color: '#69D2E7', rank: 5, wins: 32, losses: 22, powerRating: 80 },
-    { id: 'a6', name: 'ThunderClap', avatar: '⚡', color: '#FFE93E', rank: 6, wins: 29, losses: 25, powerRating: 76 },
-    { id: 'a7', name: 'NightReaper', avatar: '💀', color: '#9B59B6', rank: 7, wins: 26, losses: 28, powerRating: 72 },
-    { id: 'a8', name: 'TitanForce', avatar: '🦾', color: '#2ECC71', rank: 8, wins: 23, losses: 30, powerRating: 68 },
-];
-
-let liveArenaState = {
-    viewers: 1800 + Math.floor(Math.random() * 400),
-    totalBetsToday: 284000 + Math.floor(Math.random() * 50000),
-    matchesPlayedToday: 47 + Math.floor(Math.random() * 20),
-    activeBetsPool: 5420,
-    recentResults: [],
-};
-
-// Simulated live activity events
-const EVENT_TEMPLATES = [
-    (a) => ({ type: 'bet', icon: '💰', text: `${['0xCafe...', '0xDead...', '0xBabe...', '0x1337...', '0xF00d...'][Math.floor(Math.random() * 5)]} bet ${[50, 100, 250, 500, 1000][Math.floor(Math.random() * 5)]} MON on ${a.name}`, color: '#FFE93E' }),
-    (a) => ({ type: 'win', icon: '🏆', text: `${a.name} won their last match! +${Math.floor(Math.random() * 500 + 100)} MON`, color: a.color }),
-    (a) => ({ type: 'streak', icon: '🔥', text: `${a.name} is on a ${Math.floor(Math.random() * 5 + 3)}-win streak!`, color: '#FF6B35' }),
-    (a) => ({ type: 'critical', icon: '💥', text: `${a.name} landed a CRITICAL HIT! -${Math.floor(Math.random() * 30 + 20)} HP`, color: '#FF2D78' }),
-    (a) => ({ type: 'combo', icon: '⚡', text: `${a.name} hit a ${Math.floor(Math.random() * 4 + 3)}x COMBO!`, color: '#00F5FF' }),
-    (a) => ({ type: 'special', icon: '🌟', text: `${a.name} unleashed SPECIAL MOVE!`, color: '#836EF9' }),
-    (a) => ({ type: 'dodge', icon: '💨', text: `${a.name} dodged a lethal blow!`, color: '#69D2E7' }),
-    (a) => ({ type: 'ko', icon: '💀', text: `${a.name} scored a KNOCKOUT!`, color: '#FF3131' }),
-    (a) => ({ type: 'join', icon: '📋', text: `${a.name} joined the matchmaking queue`, color: '#39FF14' }),
-    (a) => ({ type: 'heartbeat', icon: '💓', text: `${a.name} heartbeat — online & ready`, color: '#2ECC71' }),
-    () => ({ type: 'platform', icon: '🎮', text: `${Math.floor(Math.random() * 50 + 10)} new bets placed in the last minute`, color: '#836EF9' }),
-    () => ({ type: 'viewers', icon: '👁️', text: `${Math.floor(Math.random() * 100 + 50)} viewers just joined the arena`, color: '#00F5FF' }),
-];
-
-// Push live events every 2-4 seconds
+// Push real live stats (derived from websocket connections, live matchmaker and DB)
 setInterval(() => {
-    const agent = ARENA_AGENTS[Math.floor(Math.random() * ARENA_AGENTS.length)];
-    const template = EVENT_TEMPLATES[Math.floor(Math.random() * EVENT_TEMPLATES.length)];
-    const event = { ...template(agent), timestamp: Date.now() };
-
-    // Update live stats
-    liveArenaState.viewers += Math.floor(Math.random() * 20 - 8);
-    liveArenaState.viewers = Math.max(1500, Math.min(3000, liveArenaState.viewers));
-    liveArenaState.totalBetsToday += Math.floor(Math.random() * 500);
-    liveArenaState.activeBetsPool += Math.floor(Math.random() * 200 - 80);
-    liveArenaState.activeBetsPool = Math.max(2000, liveArenaState.activeBetsPool);
-
-    io.emit('arena:live_event', event);
-    io.emit('arena:live_stats', {
-        viewers: liveArenaState.viewers,
-        totalBetsToday: liveArenaState.totalBetsToday,
-        matchesPlayedToday: liveArenaState.matchesPlayedToday,
-        activeBetsPool: liveArenaState.activeBetsPool,
-    });
-}, 2500 + Math.floor(Math.random() * 2000));
-
-// Simulate match results periodically (add to recent results)
-setInterval(() => {
-    const agents = [...ARENA_AGENTS].sort(() => Math.random() - 0.5);
-    const winner = agents[0];
-    const loser = agents[1];
-    const monEarned = Math.floor(Math.random() * 800 + 100);
-    const result = {
-        id: `res-${Date.now()}`,
-        winner: { name: winner.name, avatar: winner.avatar, color: winner.color },
-        loser: { name: loser.name, avatar: loser.avatar, color: loser.color },
-        monEarned,
-        method: ['KO', 'Decision', 'Time Out'][Math.floor(Math.random() * 3)],
-        duration: Math.floor(Math.random() * 120 + 60),
-        timestamp: Date.now(),
-    };
-    liveArenaState.recentResults.unshift(result);
-    if (liveArenaState.recentResults.length > 10) liveArenaState.recentResults.pop();
-    liveArenaState.matchesPlayedToday++;
-    winner.wins++;
-    loser.losses++;
-
-    io.emit('arena:match_result', result);
-}, 45000 + Math.floor(Math.random() * 30000));
-
+    buildLiveStats()
+        .then((stats) => io.emit('arena:live_stats', stats))
+        .catch((err) => logger.warn('Failed to broadcast live stats', { error: err.message }));
+}, 5000);
 // (Endpoints moved before 404 handler)
 
 // ── Start Server ─────────────────────────────────────────────
@@ -504,3 +633,4 @@ server.listen(PORT, async () => {
         logger.error('AutoMatchmaker failed to start', { error: err.message, stack: err.stack });
     }
 });
+
