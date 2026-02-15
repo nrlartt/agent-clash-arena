@@ -23,63 +23,43 @@ export default function Claim() {
     const [copied, setCopied] = useState(false);
     const [twitterHandle, setTwitterHandle] = useState('');
 
-    // Step 1: Verify claim token against backend
+    // Step 1: Verify claim token or agent name against backend
     const verifyToken = useCallback(async () => {
         setStatus('verifying');
         setError(null);
 
+        if (!token) {
+            setStatus('not_found');
+            setError('No claim token or agent name provided.');
+            return;
+        }
+
         try {
-            // First try to find the agent by claim token via the agents list
-            // and check if any agent has this claim token
-            const res = await fetch(`${API_URL}/agents`);
-            if (!res.ok) throw new Error('Failed to fetch agents');
+            // Backend supports both aca_claim_xxx tokens AND agent names
+            const verifyRes = await fetch(`${API_URL}/agents/verify-claim/${encodeURIComponent(token)}`);
+            const verifyData = await verifyRes.json().catch(() => ({}));
 
-            const data = await res.json();
-            const agents = data.data || [];
-
-            // The claim token is in the URL, but we can't see it in the public list
-            // So we attempt to verify it via a dedicated endpoint or check status
-            // For now, we check if token matches the format and show the claim form
-            if (!token || !token.startsWith('aca_claim_')) {
-                setStatus('not_found');
-                setError('Invalid claim token format.');
+            if (verifyRes.ok && verifyData.success && verifyData.agent) {
+                setAgentData(verifyData.agent);
+                setStatus('found');
                 return;
             }
 
-            // Try direct claim verification
-            const verifyRes = await fetch(`${API_URL}/agents/verify-claim/${token}`);
-            if (verifyRes.ok) {
-                const verifyData = await verifyRes.json();
-                if (verifyData.success && verifyData.agent) {
-                    setAgentData(verifyData.agent);
-                    setStatus('found');
-                    return;
-                }
+            if (verifyRes.status === 409) {
+                // Agent already claimed
+                setStatus('not_found');
+                setError(verifyData?.error || 'This agent has already been claimed.');
+                return;
             }
 
-            // Fallback: Try to find pending agents (the claim token matches)
-            // This handles the case where verify-claim endpoint doesn't exist yet
-            // Show a generic claim form
-            setAgentData({
-                name: 'Agent',
-                description: 'AI Combat Agent awaiting claim verification',
-                strategy: 'balanced',
-                weaponPreference: 'blade',
-                claimToken: token,
-            });
-            setStatus('found');
+            // Not found
+            setStatus('not_found');
+            setError(verifyData?.error || 'Agent or claim token not found.');
 
         } catch (err) {
             console.error('[Claim] Verification error:', err);
-            // Even on error, show the claim form — backend will validate on submit
-            setAgentData({
-                name: 'Agent',
-                description: 'Verification in progress...',
-                strategy: 'balanced',
-                weaponPreference: 'blade',
-                claimToken: token,
-            });
-            setStatus('found');
+            setStatus('not_found');
+            setError('Could not verify claim token. Please try again.');
         }
     }, [token]);
 
@@ -99,11 +79,14 @@ export default function Claim() {
         setError(null);
 
         try {
+            // Use the real claimToken from backend if available, otherwise use URL token
+            const effectiveToken = agentData?.claimToken || token;
+
             const res = await fetch(`${API_URL}/agents/claim`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    claim_token: token,
+                    claim_token: effectiveToken,
                     wallet_address: account,
                     twitter_handle: twitterHandle || null,
                     budget: parseFloat(budget) || 100,

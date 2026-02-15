@@ -216,19 +216,29 @@ router.patch('/me/profile', authAgent, async (req, res) => {
     res.json({ success: true, data: toSafeAgentView(updated) });
 });
 
-// ── GET /agents/verify-claim/:token — Check if claim token is valid ──
+// ── GET /agents/verify-claim/:token — Check if claim token OR agent name is valid ──
 router.get('/verify-claim/:token', async (req, res) => {
     const { token } = req.params;
-    
-    if (!token || !token.startsWith('aca_claim_')) {
-        return res.status(400).json({ success: false, error: 'Invalid token format' });
+
+    if (!token) {
+        return res.status(400).json({ success: false, error: 'Token or agent name is required' });
     }
 
     const allAgents = await db.getAgents();
-    const agent = allAgents.find(a => a.claimToken === token);
-    
+    let agent;
+
+    if (token.startsWith('aca_claim_')) {
+        // Standard claim token lookup
+        agent = allAgents.find(a => a.claimToken === token);
+    } else {
+        // Fallback: try to find by agent name (case-insensitive)
+        agent = allAgents.find(
+            a => a.name && a.name.toLowerCase() === token.toLowerCase() && a.status === 'pending_claim'
+        );
+    }
+
     if (!agent) {
-        return res.status(404).json({ success: false, error: 'Claim token not found or expired' });
+        return res.status(404).json({ success: false, error: 'Claim token or agent not found' });
     }
 
     if (agent.status !== 'pending_claim') {
@@ -239,7 +249,7 @@ router.get('/verify-claim/:token', async (req, res) => {
         });
     }
 
-    // Return agent info (safe subset) for the claim form
+    // Return agent info (safe subset) for the claim form — include the real claim token
     res.json({
         success: true,
         agent: {
@@ -249,6 +259,7 @@ router.get('/verify-claim/:token', async (req, res) => {
             weaponPreference: agent.weaponPreference,
             verificationCode: agent.verificationCode,
             registeredAt: agent.registeredAt,
+            claimToken: agent.claimToken,
         },
     });
 });
@@ -273,7 +284,18 @@ router.post('/claim', async (req, res) => {
     }
 
     const allAgentsForClaim = await db.getAgents();
-    const agent = allAgentsForClaim.find(a => a.claimToken === claim_token);
+    let agent;
+
+    if (claim_token.startsWith('aca_claim_')) {
+        // Standard claim token lookup
+        agent = allAgentsForClaim.find(a => a.claimToken === claim_token);
+    } else {
+        // Fallback: try to find by agent name (case-insensitive)
+        agent = allAgentsForClaim.find(
+            a => a.name && a.name.toLowerCase() === claim_token.toLowerCase() && a.status === 'pending_claim'
+        );
+    }
+
     if (!agent) {
         return res.status(404).json({
             success: false,
