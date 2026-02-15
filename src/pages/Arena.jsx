@@ -18,6 +18,7 @@ import { AGENTS } from '../data/mockData';
 import { calculateEquipmentBonus } from '../data/inventory';
 import { useInventory } from '../context/InventoryContext';
 import { playSound } from '../utils/audio';
+import contractService from '../services/contractService';
 import './Arena.css';
 
 // ── API Config ──
@@ -64,7 +65,13 @@ export default function Arena() {
     const [waitingReason, setWaitingReason] = useState(null);
     const [waitingMessage, setWaitingMessage] = useState(null);
 
-    const { account } = useWallet();
+    // ── User Bet Tracking & Claim ──
+    const [myBet, setMyBet] = useState(null);           // { side, amount, matchId }
+    const [claimState, setClaimState] = useState(null);  // null | 'ready' | 'claiming' | 'claimed' | 'lost' | 'error'
+    const [claimTxHash, setClaimTxHash] = useState(null);
+    const [claimError, setClaimError] = useState(null);
+
+    const { account, provider, isMonad, fetchBalance } = useWallet();
     const { inventories } = useInventory();
     const socketRef = useRef(null);
     const activityFeedRef = useRef(null);
@@ -171,6 +178,11 @@ export default function Arena() {
                 setFightMaxRounds(3);
                 setFightRoundPaused(false);
                 setMatchKey(k => k + 1);
+                // Reset bet tracking for new match
+                setMyBet(null);
+                setClaimState(null);
+                setClaimTxHash(null);
+                setClaimError(null);
             } else if (phase === 'FIGHTING') {
                 setWaitingReason(null);
                 setWaitingMessage(null);
@@ -195,6 +207,22 @@ export default function Arena() {
                 setServerFightState(null);
                 setGameState('FINISHED');
                 setTimeLeft(10);
+
+                // Determine claim state based on user's bet
+                setMyBet(prevBet => {
+                    if (prevBet && result) {
+                        const userWon = prevBet.side === result.winnerId;
+                        if (userWon && result.onChainResolved) {
+                            setClaimState('ready');
+                        } else if (userWon && !result.onChainResolved) {
+                            setClaimState('error');
+                            setClaimError('Match could not be resolved on-chain. Please contact support.');
+                        } else {
+                            setClaimState('lost');
+                        }
+                    }
+                    return prevBet;
+                });
             } else if (phase === 'COOLDOWN' || phase === 'WAITING' || phase === 'IDLE') {
                 setWaitingReason(reason || null);
                 setWaitingMessage(message || null);
@@ -317,6 +345,28 @@ export default function Arena() {
         }
     }, []);
 
+    // ── Claim Winnings Handler ──
+    const handleClaimWinnings = useCallback(async () => {
+        if (!myBet?.matchId || claimState !== 'ready') return;
+        setClaimState('claiming');
+        setClaimError(null);
+        try {
+            // Initialize contract if needed
+            if (provider && isMonad && contractService.isConfigured && !contractService.contract) {
+                await contractService.init(provider);
+            }
+            const result = await contractService.claimWinnings(myBet.matchId);
+            setClaimState('claimed');
+            setClaimTxHash(result.txHash);
+            playSound('cheer');
+            if (fetchBalance) fetchBalance();
+        } catch (err) {
+            console.error('[Arena] claimWinnings failed:', err);
+            setClaimState('error');
+            setClaimError(err?.message || 'Failed to claim winnings.');
+        }
+    }, [myBet, claimState, provider, isMonad, fetchBalance]);
+
     // Keep timer synchronized across clients by using phase end timestamp.
     // During LIVE state, fight ticks from server provide the round timer instead.
     useEffect(() => {
@@ -348,6 +398,14 @@ export default function Arena() {
                 return;
             }
 
+            // Track user's bet for claim UI
+            if (bet.side && bet.amount && currentMatch?.id) {
+                setMyBet({ side: bet.side, amount: bet.amount, matchId: currentMatch.id, txHash: bet.txHash });
+                setClaimState(null);
+                setClaimTxHash(null);
+                setClaimError(null);
+            }
+
             let settled = false;
             const timeout = setTimeout(() => {
                 if (settled) return;
@@ -362,7 +420,7 @@ export default function Arena() {
                 resolve(response || { ok: false, error: 'No response from arena server.' });
             });
         })
-    ), [wsConnected]);
+    ), [wsConnected, currentMatch?.id]);
 
     // ── Computed ──
     const winnerAgent = useMemo(() => {
@@ -951,16 +1009,89 @@ export default function Arena() {
                                         {/* Reward Info */}
                                         {(matchResult.monEarned > 0 || matchResult.totalBets > 0) && (
                                             <div className="result-rewards">
-                                                {matchResult.monEarned > 0 && (
-                                                    <div className="result-reward-item">
-                                                        <Zap size={12} />
-                                                        <span>Winner Reward: <strong>{matchResult.monEarned} MON</strong></span>
-                                                    </div>
-                                                )}
                                                 {matchResult.totalBets > 0 && (
                                                     <div className="result-reward-item">
                                                         <TrendingUp size={12} />
-                                                        <span>Total Bets: <strong>{matchResult.totalBets} MON</strong></span>
+                                                        <span>Total Pool: <strong>{matchResult.totalBets} MON</strong></span>
+                                                    </div>
+                                                )}
+                                                {matchResult.onChainResolved && (
+                                                    <div className="result-reward-item result-reward-item--onchain">
+                                                        <Shield size={12} />
+                                                        <span>Resolved on-chain</span>
+                                                        {matchResult.onChainResolveTx && (
+                                                            <a
+                                                                href={`https://monadscan.com/tx/${matchResult.onChainResolveTx}`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="result-reward-item__tx-link"
+                                                            >
+                                                                TX <ArrowUpRight size={10} />
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Claim Winnings Section */}
+                                        {myBet && (
+                                            <div className="result-claim-section">
+                                                <div className="result-claim-section__bet-info">
+                                                    <span>Your Bet: <strong>{myBet.amount} MON</strong> on <strong>{myBet.side === '1' ? currentMatch.agent1.name : currentMatch.agent2.name}</strong></span>
+                                                </div>
+
+                                                {claimState === 'ready' && (
+                                                    <button
+                                                        className="result-claim-btn result-claim-btn--ready"
+                                                        onClick={handleClaimWinnings}
+                                                    >
+                                                        <Trophy size={16} />
+                                                        CLAIM WINNINGS
+                                                    </button>
+                                                )}
+
+                                                {claimState === 'claiming' && (
+                                                    <button className="result-claim-btn result-claim-btn--loading" disabled>
+                                                        <span className="spinner" />
+                                                        Claiming on Monad...
+                                                    </button>
+                                                )}
+
+                                                {claimState === 'claimed' && (
+                                                    <div className="result-claim-success">
+                                                        <Zap size={14} />
+                                                        <span>Winnings claimed!</span>
+                                                        {claimTxHash && (
+                                                            <a
+                                                                href={`https://monadscan.com/tx/${claimTxHash}`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="result-claim-success__tx"
+                                                            >
+                                                                View TX <ArrowUpRight size={10} />
+                                                            </a>
+                                                        )}
+                                                    </div>
+                                                )}
+
+                                                {claimState === 'lost' && (
+                                                    <div className="result-claim-lost">
+                                                        <span>Better luck next time!</span>
+                                                    </div>
+                                                )}
+
+                                                {claimState === 'error' && (
+                                                    <div className="result-claim-error">
+                                                        <span>{claimError || 'Claim failed'}</span>
+                                                        {myBet.side === matchResult.winnerId && (
+                                                            <button
+                                                                className="result-claim-btn result-claim-btn--retry"
+                                                                onClick={handleClaimWinnings}
+                                                            >
+                                                                Retry Claim
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>

@@ -298,7 +298,10 @@ class AutoMatchmaker {
         this.currentMatch.phaseStartedAt = toTimestamp(candidate.phaseStartedAt || candidate.createdAt || now);
         this.currentMatch.phaseEndsAt = savedPhaseEnd > now ? savedPhaseEnd : (now + 5000);
         this.io.emit('match:new', this.currentMatch);
-        this._startFight({ restored: true });
+        this._startFight({ restored: true }).catch(err => {
+            logger.error('[AutoMatchmaker] Restored _startFight crashed', { error: err.message });
+            this._scheduleNextMatch();
+        });
         logger.info('[AutoMatchmaker] Restored fighting phase from DB', { matchId: this.currentMatch.id });
     }
 
@@ -391,7 +394,10 @@ class AutoMatchmaker {
             const minPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
             const pool = Number(this.currentMatch.totalBets || 0);
             if (pool < minPool) return;
-            this._startFight();
+            this._startFight().catch(err => {
+                logger.error('[AutoMatchmaker] _startFight crashed from betting countdown', { error: err.message });
+                this._scheduleNextMatch();
+            });
         }, POOL_READY_START_DELAY_MS);
     }
 
@@ -659,7 +665,7 @@ class AutoMatchmaker {
         this._startBettingCountdown();
     }
 
-    _startFight({ restored = false } = {}) {
+    async _startFight({ restored = false } = {}) {
         if (!this.currentMatch) return;
         clearInterval(this.bettingInterval);
         this._fightStartPending = false;
@@ -684,11 +690,19 @@ class AutoMatchmaker {
         }
         this._persistCurrentMatch();
 
-        // Lock match on-chain (no more bets)
+        // Lock match on-chain (no more bets) — await to ensure lock happens before fight
         if (this.currentMatch.onChain) {
-            blockchain.lockMatchOnChain(this.currentMatch.id).catch(err => {
+            try {
+                const lockHash = await blockchain.lockMatchOnChain(this.currentMatch.id);
+                if (lockHash) {
+                    logger.info(`[AutoMatchmaker] Match locked on-chain: ${lockHash}`);
+                    this.currentMatch.onChainLocked = true;
+                } else {
+                    logger.warn('[AutoMatchmaker] lockMatch returned null — match may still be Open on-chain');
+                }
+            } catch (err) {
                 logger.warn(`[AutoMatchmaker] On-chain lock failed: ${err.message}`);
-            });
+            }
         }
 
         this.io.emit('match:phase', {
@@ -766,7 +780,37 @@ class AutoMatchmaker {
         const method = simulatorResult?.method || 'Decision';
         const fightDuration = simulatorResult?.duration || Math.floor(FIGHT_DURATION / 1000);
 
-        const monEarned = Math.floor(this.currentMatch.totalBets * 0.75) || Math.floor(Math.random() * 500 + 100);
+        // Real pool-based earnings only — no fake numbers
+        const totalBets = Number(this.currentMatch.totalBets || 0);
+        const monEarned = totalBets > 0 ? Math.floor(totalBets * 0.75) : 0;
+
+        // ── Resolve match on-chain FIRST (before emitting result) ──
+        let onChainResolved = false;
+        let onChainResolveTx = null;
+        if (this.currentMatch.onChain) {
+            const mId = this.currentMatch.id;
+            const winnerAgentId = winnerId === '1' ? a1.id : a2.id;
+            const agent1Id = a1.id;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    const txHash = await blockchain.resolveMatchOnChain(mId, winnerAgentId, agent1Id);
+                    if (txHash) {
+                        onChainResolved = true;
+                        onChainResolveTx = txHash;
+                        logger.info(`[AutoMatchmaker] Match ${mId} resolved on-chain (attempt ${attempt}), winner: ${winner.name}, tx: ${txHash}`);
+                        break;
+                    } else {
+                        logger.warn(`[AutoMatchmaker] resolveMatchOnChain returned null (attempt ${attempt})`);
+                    }
+                } catch (err) {
+                    logger.error(`[AutoMatchmaker] resolveMatchOnChain attempt ${attempt} failed: ${err.message}`);
+                    if (attempt < 3) await new Promise(r => setTimeout(r, 2000));
+                }
+            }
+            if (!onChainResolved) {
+                logger.error(`[AutoMatchmaker] CRITICAL: Match ${mId} could NOT be resolved on-chain after 3 attempts! Bettors cannot claim.`);
+            }
+        }
 
         const result = {
             matchId: this.currentMatch.id,
@@ -776,10 +820,12 @@ class AutoMatchmaker {
             method,
             duration: fightDuration,
             monEarned,
-            totalBets: this.currentMatch.totalBets,
+            totalBets,
             timestamp: Date.now(),
             hasRealAgent: this.currentMatch.hasRealAgent,
             fightStats: simulatorResult?.fighters || null,
+            onChainResolved,
+            onChainResolveTx,
         };
 
         try {
@@ -794,7 +840,7 @@ class AutoMatchmaker {
                 method,
                 duration: fightDuration,
                 monEarned,
-                totalBets: this.currentMatch.totalBets,
+                totalBets,
                 timestamp: Date.now(),
                 completedAt: Date.now(),
                 hasRealAgent: this.currentMatch.hasRealAgent,
@@ -855,27 +901,20 @@ class AutoMatchmaker {
             }
         }
 
-        // ── Send on-chain reward to winner's owner wallet ────
+        // ── Send on-chain reward to winner's owner wallet (only if real bets exist) ──
         const rewardWallet = winner.ownerWallet || winner.agentWallet || null;
-        if (winner.isReal && rewardWallet && monEarned > 0) {
+        if (winner.isReal && rewardWallet && totalBets > 0 && monEarned > 0) {
             const rewardMON = monEarned * 0.15; // 15% of pool to winning agent owner
             if (rewardMON > 0.001) {
-                blockchain.sendReward(rewardWallet, rewardMON)
-                    .then(txHash => {
-                        if (txHash) logger.info(`[AutoMatchmaker] Reward sent: ${rewardMON} MON to ${rewardWallet} (${txHash})`);
-                    })
-                    .catch(err => logger.warn(`[AutoMatchmaker] Reward failed: ${err.message}`));
+                try {
+                    const txHash = await blockchain.sendReward(rewardWallet, rewardMON);
+                    if (txHash) {
+                        logger.info(`[AutoMatchmaker] Reward sent: ${rewardMON} MON to ${rewardWallet} (${txHash})`);
+                    }
+                } catch (err) {
+                    logger.warn(`[AutoMatchmaker] Reward send failed: ${err.message}`);
+                }
             }
-        }
-
-        // Resolve match on-chain
-        if (this.currentMatch.onChain) {
-            const mId = this.currentMatch.id;
-            const winnerAgentId = winnerId === '1' ? a1.id : a2.id;
-            const agent1Id = a1.id;
-            blockchain.resolveMatchOnChain(mId, winnerAgentId, agent1Id)
-                .then(() => logger.info(`[AutoMatchmaker] Match ${mId} resolved on-chain, winner: ${winner.name}`))
-                .catch(err => logger.warn(`[AutoMatchmaker] On-chain resolve failed: ${err.message}`));
         }
 
         // Update sim agent stats (for simulated agents only)
@@ -888,7 +927,7 @@ class AutoMatchmaker {
         try {
             await db.addActivity({
                 type: 'match_end',
-                message: `${winner.name} defeats ${loser.name}${winner.isReal ? ' [REAL]' : ''}! +${monEarned} MON`,
+                message: `${winner.name} defeats ${loser.name}${winner.isReal ? ' [REAL]' : ''}!${totalBets > 0 ? ` Pool: ${totalBets.toFixed(2)} MON` : ''}`,
                 time: Date.now(),
                 icon: '🏆',
             });
@@ -913,7 +952,7 @@ class AutoMatchmaker {
             this.io.emit('arena:live_event', {
                 type: 'match_end',
                 icon: 'ðŸ†',
-                text: `${winner.name} defeated ${loser.name}. Pool: ${this.currentMatch.totalBets.toFixed(2)} MON`,
+                text: `${winner.name} defeated ${loser.name}. Pool: ${totalBets.toFixed(2)} MON`,
                 color: winner.color,
                 timestamp: Date.now(),
             });

@@ -1444,6 +1444,142 @@
     font-weight: 700;
 }
 
+.result-reward-item--onchain {
+    background: rgba(131, 110, 249, 0.08);
+    border-color: rgba(131, 110, 249, 0.2);
+    color: #b3a4ff;
+}
+
+.result-reward-item__tx-link {
+    color: var(--monad-purple-light);
+    text-decoration: none;
+    font-size: 0.6rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0.8;
+    transition: opacity 0.15s;
+}
+
+.result-reward-item__tx-link:hover {
+    opacity: 1;
+    text-decoration: underline;
+}
+
+/* ── Claim Section ── */
+.result-claim-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    animation: result-text-enter 0.4s ease-out 0.65s both;
+}
+
+.result-claim-section__bet-info {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 4px 12px;
+    border-radius: 6px;
+}
+
+.result-claim-section__bet-info strong {
+    color: #FFE93E;
+    font-weight: 700;
+}
+
+.result-claim-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 24px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.2s;
+}
+
+.result-claim-btn--ready {
+    background: linear-gradient(135deg, #FFE93E, #FF6B35);
+    color: #000;
+    box-shadow: 0 0 20px rgba(255, 233, 62, 0.3);
+    animation: claim-pulse 1.5s ease-in-out infinite;
+}
+
+.result-claim-btn--ready:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 30px rgba(255, 233, 62, 0.5);
+}
+
+.result-claim-btn--loading {
+    background: rgba(131, 110, 249, 0.15);
+    color: var(--text-secondary);
+    border: 1px solid rgba(131, 110, 249, 0.3);
+    cursor: wait;
+}
+
+.result-claim-btn--retry {
+    background: rgba(255, 107, 53, 0.15);
+    color: #FF6B35;
+    border: 1px solid rgba(255, 107, 53, 0.3);
+    font-size: 0.65rem;
+    padding: 4px 12px;
+    margin-top: 4px;
+}
+
+.result-claim-btn--retry:hover {
+    background: rgba(255, 107, 53, 0.25);
+}
+
+.result-claim-success {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #2ECC71;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.result-claim-success__tx {
+    color: var(--monad-purple-light);
+    text-decoration: none;
+    font-size: 0.6rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.result-claim-success__tx:hover {
+    text-decoration: underline;
+}
+
+.result-claim-lost {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.result-claim-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65rem;
+    color: #FF4757;
+}
+
+@keyframes claim-pulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(255, 233, 62, 0.3); }
+    50% { box-shadow: 0 0 35px rgba(255, 233, 62, 0.6); }
+}
+
 /* ── Next Match ── */
 .result-next-match {
     display: flex;
