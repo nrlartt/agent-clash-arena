@@ -188,7 +188,7 @@ router.post('/webhook', telegramLimiter, async (req, res) => {
 
     let result;
     try {
-        result = registerAgentFromTelegram({ username, firstName, chatId });
+        result = await registerAgentFromTelegram({ username, firstName, chatId });
     } catch (error) {
         const reason = error instanceof AgentWalletError
             ? 'Wallet security config missing on server.'
