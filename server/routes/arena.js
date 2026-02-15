@@ -71,7 +71,7 @@ router.get('/heartbeat', authAgent, async (req, res) => {
     const agent = req.agent;
 
     // Update last heartbeat
-    await db.updateAgent(agent.id, { lastHeartbeat: Date.now() });
+    await db.updateAgent(agent._id || agent.id, { lastHeartbeat: Date.now() });
 
     // Check for pending matches
     const liveMatches = await db.getLiveMatches();
@@ -162,7 +162,7 @@ router.post('/queue', authAgent, async (req, res) => {
         }
 
         // Deduct entry fee from budget
-        await db.updateAgent(agent.id, {
+        await db.updateAgent(agent._id || agent.id, {
             budget: {
                 ...agent.budget,
                 spent: (agent.budget.spent || 0) + QUEUE_ENTRY_FEE,
@@ -173,7 +173,7 @@ router.post('/queue', authAgent, async (req, res) => {
     }
 
     const queueEntry = {
-        agentId: agent.id,
+        agentId: agent._id || agent.id,
         agentName: agent.name,
         rank: agent.rank,
         powerRating: agent.powerRating,
@@ -183,7 +183,7 @@ router.post('/queue', authAgent, async (req, res) => {
 
     matchQueue.push(queueEntry);
 
-    await db.updateAgent(agent.id, { status: 'in_queue' });
+    await db.updateAgent(agent._id || agent.id, { status: 'in_queue' });
 
     await db.addActivity({
         type: 'queue',
@@ -425,8 +425,8 @@ async function createMatch(agent1, agent2, mode, io) {
     await db.addMatch(match);
 
     // Update agent statuses
-    await db.updateAgent(agent1.id, { status: 'in_match' });
-    await db.updateAgent(agent2.id, { status: 'in_match' });
+    await db.updateAgent(agent1._id || agent1.id, { status: 'in_match' });
+    await db.updateAgent(agent2._id || agent2.id, { status: 'in_match' });
 
     await db.addActivity({
         type: 'match_start',

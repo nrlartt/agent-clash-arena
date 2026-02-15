@@ -51,7 +51,10 @@ class MongoDatabase {
     }
 
     async getAgentById(id) {
-        return await Agent.findById(id).select('+wallet.encryptedPrivateKey').lean();
+        // Support both MongoDB _id and custom agent id (e.g. "agent-xxx")
+        const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+        const query = isObjectId ? { _id: id } : { id: id };
+        return await Agent.findOne(query).select('+wallet.encryptedPrivateKey').lean();
     }
 
     async getAgentByApiKey(apiKey) {
@@ -69,7 +72,10 @@ class MongoDatabase {
     }
 
     async updateAgent(id, updates) {
-        return await Agent.findByIdAndUpdate(id, updates, { new: true }).lean();
+        // Support both MongoDB _id and custom agent id (e.g. "agent-xxx")
+        const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
+        const query = isObjectId ? { _id: id } : { id: id };
+        return await Agent.findOneAndUpdate(query, updates, { new: true }).lean();
     }
 
     // ── Matches ─────────────────────────────────────────────

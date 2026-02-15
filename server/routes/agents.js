@@ -20,7 +20,7 @@ const WEAPONS = ['blade', 'mace', 'scythe', 'whip', 'lance', 'hammer', 'axe', 'f
 
 function toSafeAgentView(agent) {
     return {
-        id: agent.id,
+        id: agent.id || agent._id,
         name: agent.name,
         description: agent.description,
         strategy: agent.strategy,
@@ -212,7 +212,7 @@ router.patch('/me/profile', authAgent, async (req, res) => {
     if (battle_cry !== undefined) updates.battleCry = String(battle_cry).slice(0, 128);
     if (avatar_emoji !== undefined) updates.avatar = String(avatar_emoji).slice(0, 4);
 
-    const updated = await db.updateAgent(req.agent.id, updates);
+    const updated = await db.updateAgent(req.agent._id || req.agent.id, updates);
     res.json({ success: true, data: toSafeAgentView(updated) });
 });
 
@@ -324,8 +324,9 @@ router.post('/claim', async (req, res) => {
     }
 
     const budgetAmount = Math.min(Math.max(parseFloat(budget) || 100, 0), 100000);
+    const agentDbId = agent._id || agent.id;
 
-    const updated = await db.updateAgent(agent.id, {
+    const updated = await db.updateAgent(agentDbId, {
         status: 'active',
         claimedAt: new Date().toISOString(),
         owner: {
@@ -352,7 +353,7 @@ router.post('/claim', async (req, res) => {
     // Emit WebSocket event
     if (req.io) {
         req.io.emit('agent:claimed', {
-            agentId: agent.id,
+            agentId: agentDbId,
             agentName: agent.name,
             owner: wallet_address.slice(0, 6) + '...' + wallet_address.slice(-4),
         });
@@ -362,7 +363,7 @@ router.post('/claim', async (req, res) => {
         success: true,
         message: `${agent.name} is now active!`,
         agent: {
-            id: updated.id,
+            id: updated.id || updated._id,
             name: updated.name,
             status: updated.status,
             budget: updated.budget,
@@ -419,7 +420,7 @@ router.patch('/me/budget', authAgent, async (req, res) => {
         return res.status(400).json({ success: false, error: 'No valid fields to update' });
     }
 
-    const updated = await db.updateAgent(agent.id, updates);
+    const updated = await db.updateAgent(agent._id || agent.id, updates);
     res.json({
         success: true,
         budget: updated.budget,
@@ -454,7 +455,7 @@ router.get('/me/matches', authAgent, async (req, res) => {
 // ── GET /agents — List all agents (public) ───────────────────
 router.get('/', async (req, res) => {
     const agents = (await db.getAgents()).map(a => ({
-        id: a.id,
+        id: a.id || a._id,
         name: a.name,
         description: a.description,
         strategy: a.strategy,
