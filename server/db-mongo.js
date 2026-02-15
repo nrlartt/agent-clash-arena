@@ -75,7 +75,7 @@ class MongoDatabase {
         // Support both MongoDB _id and custom agent id (e.g. "agent-xxx")
         const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
         const query = isObjectId ? { _id: id } : { id: id };
-        return await Agent.findOneAndUpdate(query, updates, { new: true }).lean();
+        return await Agent.findOneAndUpdate(query, updates, { returnDocument: 'after' }).lean();
     }
 
     // ── Matches ─────────────────────────────────────────────
@@ -101,7 +101,7 @@ class MongoDatabase {
             return await Match.findOneAndUpdate(
                 { $or: [{ id: matchKey }, { matchId: matchKey }] },
                 { ...matchData, id: matchData.id || matchKey, matchId: matchData.matchId || matchKey },
-                { new: true, upsert: true, setDefaultsOnInsert: true }
+                { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
             ).lean();
         }
         const match = new Match(matchData);
@@ -114,7 +114,7 @@ class MongoDatabase {
         const query = isObjectId
             ? { _id: id }
             : { $or: [{ id }, { matchId: id }] };
-        return await Match.findOneAndUpdate(query, updates, { new: true }).lean();
+        return await Match.findOneAndUpdate(query, updates, { returnDocument: 'after' }).lean();
     }
 
     async removeMatch(id) {
@@ -132,7 +132,7 @@ class MongoDatabase {
             return await Match.findOneAndUpdate(
                 { $or: [{ id: key }, { matchId: key }] },
                 { status: 'finished', id: entry.id || key, matchId: entry.matchId || key, ...entry },
-                { new: true, upsert: true, setDefaultsOnInsert: true }
+                { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
             ).lean();
         }
         const match = new Match({ ...entry, status: 'finished' });
@@ -164,7 +164,7 @@ class MongoDatabase {
             return await Bet.findOneAndUpdate(
                 { id: payload.id },
                 payload,
-                { new: true, upsert: true, setDefaultsOnInsert: true }
+                { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
             ).lean();
         }
         const bet = new Bet(payload);
@@ -175,7 +175,26 @@ class MongoDatabase {
     async updateBet(id, updates) {
         const isObjectId = mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
         const query = isObjectId ? { _id: id } : { id };
-        return await Bet.findOneAndUpdate(query, updates, { new: true }).lean();
+        return await Bet.findOneAndUpdate(query, updates, { returnDocument: 'after' }).lean();
+    }
+
+    async resetAllAgentData() {
+        const [agents, matches, bets, activity] = await Promise.all([
+            Agent.deleteMany({}),
+            Match.deleteMany({}),
+            Bet.deleteMany({}),
+            Activity.deleteMany({}),
+        ]);
+
+        return {
+            agentsDeleted: Number(agents?.deletedCount || 0),
+            matchesDeleted: Number(matches?.deletedCount || 0),
+            betsDeleted: Number(bets?.deletedCount || 0),
+            matchHistoryDeleted: 0,
+            activityDeleted: Number(activity?.deletedCount || 0),
+            shopOrdersDeleted: 0,
+            inventoriesDeleted: 0,
+        };
     }
 
     async getBetsByWallet(walletAddress) {

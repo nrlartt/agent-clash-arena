@@ -207,7 +207,7 @@ export class GameEngine {
                 this._aiFlurry(id, agent, angle, dist, spd, now);
                 break;
             case AI_PHASE.REPOSITION:
-                this._aiReposition(agent, angle, dist, spd, now);
+                this._aiReposition(id, agent, angle, dist, spd, now);
                 break;
             case AI_PHASE.DASH:
                 this._aiDash(id, agent, oPos, angle, dist, spd, now);
@@ -330,7 +330,7 @@ export class GameEngine {
         }
     }
 
-    _aiReposition(agent, angle, dist, spd, now) {
+    _aiReposition(id, agent, angle, dist, spd, now) {
         // Back away and circle
         const retreatAngle = angle + Math.PI + (Math.random() - 0.5) * 1.0;
         const force = dist < 100 ? 0.0008 : 0.0004;

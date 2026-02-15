@@ -128,6 +128,41 @@ class AutoMatchmaker {
         logger.info('[AutoMatchmaker] Stopped');
     }
 
+    forceReset(reason = 'NO_REAL_AGENTS', message = 'Arena reset completed. Waiting for new registrations.') {
+        clearTimeout(this.phaseTimer);
+        clearInterval(this.bettingInterval);
+
+        this._fightStartPending = false;
+        this.currentMatch = null;
+        this.phase = 'WAITING';
+        this.waitingReason = reason;
+        this.waitingMessage = message;
+        this.bettingTimeLeft = Math.ceil(WAITING_RETRY_MS / 1000);
+        this.matchHistory = [];
+
+        this.io.emit('match:history', []);
+        this.io.emit('match:phase', {
+            phase: 'WAITING',
+            match: null,
+            timeLeft: this.bettingTimeLeft,
+            reason,
+            message,
+        });
+
+        if (message) {
+            this.io.emit('arena:live_event', {
+                type: 'waiting',
+                icon: '⏳',
+                text: message,
+                color: '#FFE93E',
+                timestamp: Date.now(),
+            });
+        }
+
+        this.phaseTimer = setTimeout(() => this._safeNextMatch(), WAITING_RETRY_MS);
+        logger.info('[AutoMatchmaker] Force reset applied', { reason });
+    }
+
     getState() {
         const now = Date.now();
         const phaseTimeLeft = this.currentMatch?.phaseEndsAt
@@ -817,12 +852,13 @@ class AutoMatchmaker {
         }
 
         // ── Send on-chain reward to winner's owner wallet ────
-        if (winner.isReal && winner.ownerWallet && monEarned > 0) {
+        const rewardWallet = winner.ownerWallet || winner.agentWallet || null;
+        if (winner.isReal && rewardWallet && monEarned > 0) {
             const rewardMON = monEarned * 0.15; // 15% of pool to winning agent owner
             if (rewardMON > 0.001) {
-                blockchain.sendReward(winner.ownerWallet, rewardMON)
+                blockchain.sendReward(rewardWallet, rewardMON)
                     .then(txHash => {
-                        if (txHash) logger.info(`[AutoMatchmaker] Reward sent: ${rewardMON} MON to ${winner.ownerWallet} (${txHash})`);
+                        if (txHash) logger.info(`[AutoMatchmaker] Reward sent: ${rewardMON} MON to ${rewardWallet} (${txHash})`);
                     })
                     .catch(err => logger.warn(`[AutoMatchmaker] Reward failed: ${err.message}`));
             }

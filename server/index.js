@@ -350,6 +350,7 @@ io.use((socket, next) => {
 // ── Auto Matchmaker (creates matches automatically) ──────────
 const AutoMatchmaker = require('./utils/auto-matchmaker');
 const matchmaker = new AutoMatchmaker(io);
+app.locals.matchmaker = matchmaker;
 const BETTING_CONTRACT_ADDRESS = String(process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS || '').trim();
 const BETTING_RPC_URL = process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
 const ONCHAIN_BETTING_REQUIRED = process.env.ONCHAIN_BETTING_REQUIRED !== 'false';

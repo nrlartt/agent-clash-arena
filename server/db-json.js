@@ -373,6 +373,29 @@ class JsonDatabase {
         return inventory;
     }
 
+    resetAllAgentData() {
+        const summary = {
+            agentsDeleted: this.data.agents.length,
+            matchesDeleted: this.data.matches.length,
+            betsDeleted: this.data.bets.length,
+            matchHistoryDeleted: this.data.matchHistory.length,
+            activityDeleted: this.data.activityFeed.length,
+            shopOrdersDeleted: this.data.shopOrders.length,
+            inventoriesDeleted: Object.keys(this.data.agentInventories || {}).length,
+        };
+
+        this.data.agents = [];
+        this.data.matches = [];
+        this.data.bets = [];
+        this.data.matchHistory = [];
+        this.data.activityFeed = [];
+        this.data.shopOrders = [];
+        this.data.agentInventories = {};
+
+        this._save();
+        return summary;
+    }
+
     updatePlatformEconomy(updates = {}) {
         this.data.platform = {
             ...DEFAULT_DB.platform,

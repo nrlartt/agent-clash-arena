@@ -17,16 +17,20 @@ const router = express.Router();
 const matchQueue = [];
 const TOURNAMENT_MIN_AGENTS = Math.max(2, parseInt(process.env.TOURNAMENT_MIN_AGENTS || '8', 10));
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || '';
-let tournamentState = {
-    active: false,
-    id: null,
-    createdAt: null,
-    minAgents: TOURNAMENT_MIN_AGENTS,
-    currentRound: 0,
-    participants: [],
-    rounds: [],
-    champion: null,
-};
+function createInitialTournamentState() {
+    return {
+        active: false,
+        id: null,
+        createdAt: null,
+        minAgents: TOURNAMENT_MIN_AGENTS,
+        currentRound: 0,
+        participants: [],
+        rounds: [],
+        champion: null,
+    };
+}
+
+let tournamentState = createInitialTournamentState();
 
 async function getEligibleTournamentAgents() {
     return (await db.getAgents())
@@ -388,6 +392,55 @@ router.post('/tournament/start', requireAdmin, async (_req, res) => {
         success: true,
         message: 'Tournament started',
         data: tournamentState,
+    });
+});
+
+// ── POST /arena/admin/reset-agents ── Delete all agents and live arena data
+router.post('/admin/reset-agents', requireAdmin, async (req, res) => {
+    if (typeof db.resetAllAgentData !== 'function') {
+        return res.status(501).json({
+            success: false,
+            error: 'DB backend does not support resetAllAgentData',
+        });
+    }
+
+    const summary = await db.resetAllAgentData();
+    matchQueue.length = 0;
+    tournamentState = createInitialTournamentState();
+
+    const matchmaker = req.app?.locals?.matchmaker;
+    if (matchmaker && typeof matchmaker.forceReset === 'function') {
+        matchmaker.forceReset(
+            'NO_REAL_AGENTS',
+            'All agents were cleared by admin. Waiting for fresh Telegram registrations.'
+        );
+    }
+
+    try {
+        await db.addActivity({
+            type: 'admin_reset',
+            message: 'Admin cleared all agents and arena state.',
+            time: Date.now(),
+            icon: '🧹',
+        });
+    } catch (actErr) {
+        logger.warn('[Arena] Could not persist admin reset activity', { error: actErr.message });
+    }
+
+    if (req.io) {
+        req.io.emit('arena:live_event', {
+            type: 'admin_reset',
+            icon: '🧹',
+            text: 'Arena data reset by admin. Waiting for new real agents.',
+            color: '#FFE93E',
+            timestamp: Date.now(),
+        });
+    }
+
+    return res.json({
+        success: true,
+        message: 'All agents and live arena records were deleted',
+        data: summary,
     });
 });
 

@@ -7,7 +7,16 @@ import { useEffect, useRef, useCallback } from 'react';
 import { GameEngine } from '../engine/GameEngine';
 import { playSound } from '../utils/audio';
 
-export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, isPlaying = true, agent1Equipment, agent2Equipment }) {
+export default function GameCanvas({
+    agent1,
+    agent2,
+    onStateUpdate,
+    onMatchEnd,
+    isPlaying = true,
+    agent1Equipment,
+    agent2Equipment,
+    showRoundHud = false,
+}) {
     const canvasRef = useRef(null);
     const engineRef = useRef(null);
     const animFrameRef = useRef(null);
@@ -17,11 +26,13 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
     const agent1Ref = useRef(agent1);
     const agent2Ref = useRef(agent2);
     const isPlayingRef = useRef(isPlaying);
+    const showRoundHudRef = useRef(showRoundHud);
 
     useEffect(() => { onStateUpdateRef.current = onStateUpdate; }, [onStateUpdate]);
     useEffect(() => { onMatchEndRef.current = onMatchEnd; }, [onMatchEnd]);
     useEffect(() => { agent1Ref.current = agent1; }, [agent1]);
     useEffect(() => { agent2Ref.current = agent2; }, [agent2]);
+    useEffect(() => { showRoundHudRef.current = showRoundHud; }, [showRoundHud]);
 
     // When backend says match is over, pause engine
     useEffect(() => {
@@ -599,7 +610,7 @@ export default function GameCanvas({ agent1, agent2, onStateUpdate, onMatchEnd, 
         });
 
         // ── Round/Timer HUD ──
-        if (state.roundTimer !== undefined && !state.isFinished) {
+        if (showRoundHudRef.current && state.roundTimer !== undefined && !state.isFinished) {
             ctx.font = '700 11px "Orbitron", sans-serif';
             ctx.textAlign = 'center';
             ctx.fillStyle = 'rgba(131, 110, 249, 0.7)';

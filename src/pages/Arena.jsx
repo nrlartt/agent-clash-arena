@@ -24,9 +24,9 @@ import './Arena.css';
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
 const SOCKET_URL = API_URL.replace('/api/v1', '') || window.location.origin;
 const WAITING_REASON_LABELS = {
-    NO_REAL_AGENTS: 'Yeterli gerçek ajan yok. Yeni kayıtlar bekleniyor.',
-    CHAIN_NOT_CONFIGURED: 'On-chain servis yapılandırılmamış. Contract ayarları bekleniyor.',
-    CHAIN_CREATE_FAILED: 'Maç contract üzerinde açılamadı. Kısa süre içinde tekrar denenecek.',
+    NO_REAL_AGENTS: 'Not enough real agents. Waiting for new registrations.',
+    CHAIN_NOT_CONFIGURED: 'On-chain service is not configured. Waiting for contract setup.',
+    CHAIN_CREATE_FAILED: 'Could not create the match on-chain. Retrying shortly.',
 };
 
 export default function Arena() {
@@ -37,7 +37,6 @@ export default function Arena() {
 
     // ── Simulation State (for GameCanvas) ──
     const [liveAgentState, setLiveAgentState] = useState(null);
-    const [liveMatchState, setLiveMatchState] = useState(null);
     const [matchResult, setMatchResult] = useState(null);
     const [matchKey, setMatchKey] = useState(0);
     const [finalStats, setFinalStats] = useState(null); // Captured at match end
@@ -148,7 +147,6 @@ export default function Arena() {
                 setMatchResult(null);
                 setFinalStats(null);
                 setLiveAgentState(null);
-                setLiveMatchState(null);
                 setMatchKey(k => k + 1);
             } else if (phase === 'FIGHTING') {
                 setWaitingReason(null);
@@ -271,13 +269,23 @@ export default function Arena() {
         if (gameStateRef.current !== 'LIVE') return;
         if (update.type === 'tick') {
             setLiveAgentState(update.agents);
-            setLiveMatchState({
-                roundTimer: update.roundTimer,
-                currentRound: update.currentRound,
-                maxRounds: update.maxRounds,
-            });
         }
     }, []);
+
+    // Keep timer synchronized across clients by using phase end timestamp.
+    useEffect(() => {
+        const phaseEndsAt = Number(currentMatch?.phaseEndsAt || 0);
+        if (!phaseEndsAt) return undefined;
+        if (gameState !== 'BETTING' && gameState !== 'LIVE') return undefined;
+
+        const syncTimer = () => {
+            const remaining = Math.max(0, Math.ceil((phaseEndsAt - Date.now()) / 1000));
+            setTimeLeft(remaining);
+        };
+        syncTimer();
+        const interval = setInterval(syncTimer, 1000);
+        return () => clearInterval(interval);
+    }, [gameState, currentMatch?.id, currentMatch?.phaseEndsAt]);
 
     // GameCanvas may fire its own match end - ignore it.
     // We rely solely on backend matchmaker's match:phase RESULT event.
@@ -549,15 +557,13 @@ export default function Arena() {
 
                             {/* Center */}
                             <div className="match-center-display">
-                                <div className={`match-timer-large ${gameState === 'LIVE' && liveMatchState?.roundTimer <= 10 ? 'match-timer--danger' : ''}`}>
-                                    {gameState === 'LIVE' && liveMatchState
-                                        ? Math.floor(liveMatchState.roundTimer)
-                                        : timeLeft}
+                                <div className={`match-timer-large ${gameState === 'LIVE' && timeLeft <= 10 ? 'match-timer--danger' : ''}`}>
+                                    {Math.max(0, timeLeft)}
                                     <span className="timer-unit">s</span>
                                 </div>
                                 <div className={`match-status-pill match-status-pill--${gameState.toLowerCase()}`}>
                                     {gameState === 'FINISHED' ? '🏆 FINISHED' :
-                                        gameState === 'LIVE' && liveMatchState ? `⚔️ ROUND ${liveMatchState.currentRound}/${liveMatchState.maxRounds}` :
+                                        gameState === 'LIVE' ? '⚔️ LIVE MATCH' :
                                             gameState === 'BETTING' ? '🎰 PLACE BETS' : '⏳ STARTING SOON'}
                                 </div>
                                 {gameState === 'LIVE' && liveAgentState && (
@@ -647,8 +653,8 @@ export default function Arena() {
                                     <div className="arena-placeholder__timer">{Math.max(0, timeLeft)}</div>
                                     <p className="arena-placeholder__subtitle">
                                         {gameState === 'BETTING'
-                                            ? 'Pool threshold dolunca maç otomatik başlar.'
-                                            : waitingMessage || WAITING_REASON_LABELS[waitingReason] || (currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Maç koşulları bekleniyor...')
+                                            ? 'The match starts automatically when the pool threshold is reached.'
+                                            : waitingMessage || WAITING_REASON_LABELS[waitingReason] || (currentMatch?.id ? `${currentMatch.id} starting soon...` : 'Waiting for match conditions...')
                                         }
                                     </p>
                                     {gameState === 'BETTING' && poolMinMON > 0 && (
@@ -665,8 +671,8 @@ export default function Arena() {
                                             </div>
                                             <div className="arena-placeholder__pool-meta">
                                                 {poolRemainingMON > 0
-                                                    ? `${poolRemainingMON.toFixed(2)} MON daha gerekli`
-                                                    : 'Pool hazır, maç başlıyor...'}
+                                                    ? `${poolRemainingMON.toFixed(2)} MON more needed`
+                                                    : 'Pool ready, match starting...'}
                                             </div>
                                         </div>
                                     )}
