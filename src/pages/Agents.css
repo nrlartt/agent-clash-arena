@@ -20,6 +20,292 @@
     margin-top: 4px;
 }
 
+/* ── Hero: Join the Arena ─────────────────────────────────── */
+.agents-hero {
+    margin-bottom: var(--space-2xl);
+}
+
+.agents-hero__inner {
+    padding: var(--space-2xl);
+    background: linear-gradient(135deg, rgba(131, 110, 249, 0.08) 0%, rgba(0, 245, 255, 0.04) 50%, rgba(255, 45, 120, 0.04) 100%) !important;
+    border-color: rgba(131, 110, 249, 0.2) !important;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xl);
+}
+
+.agents-hero__top {
+    text-align: center;
+}
+
+.agents-hero__title {
+    font-size: 1.6rem;
+    margin-bottom: 8px;
+}
+
+.agents-hero__subtitle {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+/* Choice Cards */
+.agents-hero__choices {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-lg);
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.hero-choice-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-xl) var(--space-lg);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg, 12px);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    text-align: center;
+}
+
+.hero-choice-card:hover {
+    border-color: var(--monad-purple-light);
+    transform: translateY(-4px);
+    box-shadow: 0 8px 32px rgba(131, 110, 249, 0.15);
+}
+
+.hero-choice-card:hover .hero-choice-card__arrow {
+    opacity: 1;
+    transform: translateX(4px);
+}
+
+.hero-choice-card__icon {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: transform 0.3s;
+}
+
+.hero-choice-card:hover .hero-choice-card__icon {
+    transform: scale(1.1);
+}
+
+.hero-choice-card__icon--human {
+    background: linear-gradient(135deg, rgba(57, 255, 20, 0.15), rgba(0, 245, 255, 0.1));
+    color: var(--neon-green);
+    border: 2px solid rgba(57, 255, 20, 0.2);
+}
+
+.hero-choice-card__icon--agent {
+    background: linear-gradient(135deg, rgba(131, 110, 249, 0.15), rgba(0, 245, 255, 0.1));
+    color: var(--neon-cyan);
+    border: 2px solid rgba(0, 245, 255, 0.2);
+}
+
+.hero-choice-card__label {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.03em;
+}
+
+.hero-choice-card__desc {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.hero-choice-card__arrow {
+    opacity: 0;
+    color: var(--monad-purple-light);
+    transition: all 0.3s;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+}
+
+/* Back Button */
+.hero-back-btn {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.2s;
+    align-self: flex-start;
+    padding: 4px 0;
+    background: none;
+    border: none;
+}
+
+.hero-back-btn:hover {
+    color: var(--text-primary);
+}
+
+/* Flow (expanded state) */
+.agents-hero__flow {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+    animation: slide-up 0.4s ease-out;
+}
+
+.hero-flow__header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+/* Command Box */
+.hero-flow__command-box {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.hero-flow__command-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.hero-flow__command {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-md) var(--space-lg);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--radius-md);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--neon-green);
+    word-break: break-all;
+    gap: var(--space-md);
+}
+
+/* Steps */
+.hero-flow__steps {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+.hero-flow__step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: var(--radius-sm);
+    transition: background 0.2s;
+}
+
+.hero-flow__step:hover {
+    background: rgba(131, 110, 249, 0.05);
+}
+
+.hero-flow__step-num {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--gradient-primary);
+    border-radius: 50%;
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: white;
+    flex-shrink: 0;
+}
+
+.hero-flow__step-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.hero-flow__step-content a {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--monad-purple-light);
+}
+
+.hero-flow__step-content a:hover {
+    text-decoration: underline;
+}
+
+.hero-flow__step-content strong {
+    color: var(--text-primary);
+}
+
+/* API Hint */
+.hero-flow__api-hint {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.hero-flow__api-hint code {
+    font-family: var(--font-mono);
+    color: var(--monad-purple-light);
+}
+
+/* Reward Info */
+.hero-flow__reward-info {
+    display: flex;
+    gap: var(--space-xl);
+    justify-content: center;
+    padding: var(--space-md);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+}
+
+.hero-flow__reward-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.hero-flow__reward-pct {
+    font-family: var(--font-display);
+    font-size: 1.2rem;
+    font-weight: 700;
+}
+
+/* Connect Hint */
+.hero-flow__connect-hint {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: rgba(255, 233, 62, 0.06);
+    border: 1px solid rgba(255, 233, 62, 0.15);
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    color: var(--neon-yellow);
+}
+
 /* ── Tabs ──────────────────────────────────────────────────── */
 .agents-tabs {
     display: flex;
@@ -806,6 +1092,35 @@
 
     .agents-tabs {
         overflow-x: auto;
+    }
+
+    .agents-hero__inner {
+        padding: var(--space-xl);
+    }
+
+    .agents-hero__title {
+        font-size: 1.2rem;
+    }
+
+    .agents-hero__choices {
+        grid-template-columns: 1fr;
+        gap: var(--space-md);
+    }
+
+    .hero-choice-card {
+        flex-direction: row;
+        text-align: left;
+        padding: var(--space-lg);
+    }
+
+    .hero-choice-card__icon {
+        width: 48px;
+        height: 48px;
+    }
+
+    .hero-flow__reward-info {
+        flex-direction: column;
+        gap: var(--space-md);
     }
 
     .register-skill__steps-mini {
