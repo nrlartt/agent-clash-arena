@@ -74,9 +74,10 @@ const PORT = process.env.PORT || 3001;
 
 // ── Security Middleware ──────────────────────────────────────
 app.use(helmet({
-    contentSecurityPolicy: false, // Disabled — SPA serves its own assets via same-origin
-    crossOriginEmbedderPolicy: false, // Allow external images/fonts
-    crossOriginResourcePolicy: { policy: 'same-site' },
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false, // Required for Privy/Coinbase wallet popups
 }));
 
 // ── Rate Limiting ────────────────────────────────────────────
