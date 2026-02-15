@@ -71,7 +71,7 @@ function parseAmount(value, fallback, min = 0) {
 // Match phases timing and pool gating
 const BETTING_DURATION = parseDurationMs(process.env.MATCH_BETTING_DURATION_MS, 120000); // 2m default
 const BETTING_EXTENSION_DURATION = parseDurationMs(process.env.MATCH_POOL_EXTENSION_MS, BETTING_DURATION);
-const MATCH_MIN_POOL_MON = parseAmount(process.env.MATCH_MIN_POOL_MON, 100, 0);
+const MATCH_MIN_POOL_MON = parseAmount(process.env.MATCH_MIN_POOL_MON, 1000, 0);
 const WAITING_RETRY_MS = parseDurationMs(process.env.MATCH_WAITING_RETRY_MS, 10000, 1000);
 const POOL_READY_START_DELAY_MS = parseDurationMs(process.env.MATCH_POOL_READY_DELAY_MS, 2000, 250);
 const FIGHT_DURATION = 210000;     // 210s safety bound (3 × 60s rounds + pauses + buffer)
@@ -346,9 +346,17 @@ class AutoMatchmaker {
             const now = Date.now();
             const requiredPool = Number(this.currentMatch.poolMinMON || MATCH_MIN_POOL_MON);
             this.bettingTimeLeft = Math.max(0, Math.ceil((toTimestamp(this.currentMatch.phaseEndsAt) - now) / 1000));
+            const currentPool = Number(this.currentMatch.totalBets || 0);
+
+            // Track pool target status (for UI display)
+            if (currentPool >= requiredPool && !this.currentMatch.poolTargetMet) {
+                this.currentMatch.poolTargetMet = true;
+                logger.info(`[AutoMatchmaker] Pool target met (${currentPool.toFixed(2)} / ${requiredPool} MON). Waiting for timer to finish.`);
+            }
+
             this.io.emit('match:timer', {
                 timeLeft: this.bettingTimeLeft,
-                currentPool: Number(this.currentMatch.totalBets || 0),
+                currentPool,
                 minPool: requiredPool,
             });
 
@@ -356,15 +364,13 @@ class AutoMatchmaker {
                 return;
             }
 
-            const currentPool = Number(this.currentMatch.totalBets || 0);
-            if (currentPool >= requiredPool) {
-                this.currentMatch.poolTargetMet = true;
-                this._queueFightStart(currentPool, requiredPool);
-                return;
-            }
-
+            // When countdown reaches 0: start fight if pool is ready, else extend
             if (this.bettingTimeLeft <= 0) {
-                this._extendBettingWindow(currentPool, requiredPool);
+                if (currentPool >= requiredPool) {
+                    this._queueFightStart(currentPool, requiredPool);
+                } else {
+                    this._extendBettingWindow(currentPool, requiredPool);
+                }
             }
         }, 1000);
     }
@@ -1110,7 +1116,8 @@ class AutoMatchmaker {
 
         if (!wasPoolReady && this.currentMatch.poolTargetMet) {
             const now = Date.now();
-            const poolText = `Minimum pool reached (${this.currentMatch.totalBets.toFixed(2)} / ${requiredPool.toFixed(2)} MON). Match starting now.`;
+            const remaining = Math.max(0, Math.ceil((toTimestamp(this.currentMatch.phaseEndsAt) - now) / 1000));
+            const poolText = `Minimum pool reached (${this.currentMatch.totalBets.toFixed(2)} / ${requiredPool.toFixed(2)} MON)! Fight starts when timer ends (${remaining}s).`;
             this.io.emit('arena:live_event', {
                 type: 'pool_ready',
                 icon: 'POOL',
@@ -1128,7 +1135,8 @@ class AutoMatchmaker {
                 })).catch((err) => logger.warn('[AutoMatchmaker] Failed to persist pool_ready activity', { error: err.message }));
             }
 
-            this._queueFightStart(this.currentMatch.totalBets, requiredPool);
+            // Do NOT start fight immediately — wait for betting countdown to finish
+            logger.info(`[AutoMatchmaker] Pool target met via bet. Fight will start when timer expires (${remaining}s remaining).`);
         }
 
         if (typeof db.addBet === 'function') {
