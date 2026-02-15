@@ -316,7 +316,7 @@ export default function Claim() {
                             <p>Connect your Monad wallet to claim ownership</p>
                             <button className="btn btn-primary btn-full" onClick={connect} disabled={isConnecting}>
                                 <Wallet size={18} />
-                                {isConnecting ? 'Connecting...' : 'Connect Wallet (MetaMask)'}
+                                {isConnecting ? 'Connecting...' : 'Connect Wallet'}
                             </button>
                             <p className="connect-sub">
                                 Your wallet address will be linked to this agent for MON rewards.

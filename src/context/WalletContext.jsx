@@ -1,39 +1,40 @@
 // ═══════════════════════════════════════════════════════════════
-// WALLET CONTEXT — MetaMask + Monad network integration
+// WALLET CONTEXT — Privy-powered wallet integration for Monad
+// Provides useWallet() hook compatible with existing components
 // ═══════════════════════════════════════════════════════════════
 
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { BrowserProvider, formatEther } from 'ethers';
+import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { BrowserProvider, formatEther, JsonRpcProvider } from 'ethers';
 
-const MONAD_CHAIN = {
-    chainId: '0x8F',  // 143 decimal
-    chainName: 'Monad Mainnet',
-    rpcUrls: [import.meta.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz'],
-    nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
-    blockExplorerUrls: ['https://monadscan.com'],
-};
+const MONAD_CHAIN_ID = 143;
+const MONAD_RPC_URL = import.meta.env.VITE_MONAD_RPC_URL || 'https://rpc.monad.xyz';
 
-// Monad Explorer URL  
+// Monad Explorer URL
 export const MONAD_EXPLORER_URL = 'https://monadscan.com';
 
 const WalletContext = createContext(null);
 
 export function WalletProvider({ children }) {
-    const [account, setAccount] = useState(null);
+    const { ready, authenticated, login, logout, user } = usePrivy();
+    const { wallets } = useWallets();
+
     const [balance, setBalance] = useState(null);
     const [chainId, setChainId] = useState(null);
-    const [isConnecting, setIsConnecting] = useState(false);
-    const [error, setError] = useState(null);
     const [provider, setProvider] = useState(null);
-    const [walletType, setWalletType] = useState(null); // 'metamask' | 'circle'
+    const [error, setError] = useState(null);
 
-    const isMonad = chainId === 143;
-    const isInstalled = typeof window !== 'undefined' && !!window.ethereum;
+    // Get the first connected wallet
+    const activeWallet = wallets?.[0] || null;
+    const account = activeWallet?.address || null;
+    const isConnecting = !ready;
+    const isMonad = chainId === MONAD_CHAIN_ID;
 
-    // Fetch balance
-    const fetchBalance = useCallback(async (addr, prov) => {
+    // Fetch balance using RPC
+    const fetchBalance = useCallback(async (addr) => {
         try {
-            const bal = await prov.getBalance(addr);
+            const rpcProvider = new JsonRpcProvider(MONAD_RPC_URL);
+            const bal = await rpcProvider.getBalance(addr);
             setBalance(formatEther(bal));
         } catch {
             setBalance('0');
@@ -42,139 +43,105 @@ export function WalletProvider({ children }) {
 
     // Switch to Monad network
     const switchToMonad = useCallback(async () => {
-        if (walletType === 'circle') return; // Circle handles networks internally
-        if (!window.ethereum) return;
+        if (!activeWallet) return;
         try {
-            await window.ethereum.request({
-                method: 'wallet_switchEthereumChain',
-                params: [{ chainId: MONAD_CHAIN.chainId }],
-            });
-        } catch (switchErr) {
-            // Chain not added — add it
-            if (switchErr.code === 4902) {
-                try {
-                    await window.ethereum.request({
-                        method: 'wallet_addEthereumChain',
-                        params: [MONAD_CHAIN],
-                    });
-                } catch (addErr) {
-                    setError('Failed to add Monad network');
-                }
+            await activeWallet.switchChain(MONAD_CHAIN_ID);
+            setChainId(MONAD_CHAIN_ID);
+        } catch (err) {
+            console.warn('[Wallet] Switch chain failed, trying to add:', err);
+            // If switch fails, try adding the chain
+            try {
+                const ethProvider = await activeWallet.getEthereumProvider();
+                await ethProvider.request({
+                    method: 'wallet_addEthereumChain',
+                    params: [{
+                        chainId: '0x8F',
+                        chainName: 'Monad Mainnet',
+                        rpcUrls: [MONAD_RPC_URL],
+                        nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
+                        blockExplorerUrls: ['https://monadscan.com'],
+                    }],
+                });
+                setChainId(MONAD_CHAIN_ID);
+            } catch (addErr) {
+                setError('Failed to add Monad network');
             }
         }
-    }, [walletType]);
+    }, [activeWallet]);
 
-    // Connect MetaMask
-    const connect = useCallback(async () => {
-        if (!isInstalled) {
-            setError('MetaMask is not installed');
-            window.open('https://metamask.io/download/', '_blank');
+    // Set up provider and chain when wallet connects
+    useEffect(() => {
+        if (!activeWallet) {
+            setProvider(null);
+            setChainId(null);
+            setBalance(null);
             return;
         }
 
-        setIsConnecting(true);
-        setError(null);
+        let cancelled = false;
 
-        try {
-            const prov = new BrowserProvider(window.ethereum);
-            setProvider(prov);
+        async function setup() {
+            try {
+                const ethProvider = await activeWallet.getEthereumProvider();
+                const web3Provider = new BrowserProvider(ethProvider);
+                if (cancelled) return;
+                setProvider(web3Provider);
 
-            // Request accounts
-            const accounts = await window.ethereum.request({
-                method: 'eth_requestAccounts',
-            });
+                // Get chain ID
+                const network = await web3Provider.getNetwork();
+                const currentChainId = Number(network.chainId);
+                if (cancelled) return;
+                setChainId(currentChainId);
 
-            if (accounts.length === 0) {
-                setError('No accounts found');
-                setIsConnecting(false);
-                return;
+                // Auto-switch to Monad if not on it
+                if (currentChainId !== MONAD_CHAIN_ID) {
+                    try {
+                        await activeWallet.switchChain(MONAD_CHAIN_ID);
+                        if (!cancelled) setChainId(MONAD_CHAIN_ID);
+                    } catch {
+                        // Silent fail — user sees "Wrong Network" UI
+                    }
+                }
+
+                // Fetch balance
+                if (activeWallet.address) {
+                    fetchBalance(activeWallet.address);
+                }
+            } catch (err) {
+                console.error('[Wallet] Setup error:', err);
+                if (!cancelled) setError(err.message);
             }
-
-            const addr = accounts[0];
-            setAccount(addr);
-            setWalletType('metamask');
-
-            // Get chain id
-            const network = await prov.getNetwork();
-            const currentChainId = Number(network.chainId);
-            setChainId(currentChainId);
-
-            // Switch to Monad if not on it
-            if (currentChainId !== 143) {
-                await switchToMonad();
-            }
-
-            // Fetch balance
-            await fetchBalance(addr, prov);
-        } catch (err) {
-            if (err.code === 4001) {
-                setError('Connection rejected by user');
-            } else {
-                setError(err.message || 'Failed to connect');
-            }
-        } finally {
-            setIsConnecting(false);
         }
-    }, [isInstalled, switchToMonad, fetchBalance]);
 
-    // Connect Circle Wallet
-    const connectCircle = useCallback((address, balance) => {
-        setAccount(address);
-        setBalance(balance);
-        setChainId(143); // Assume Monad for now
-        setWalletType('circle');
-        setProvider(null); // Circle handled via SDK service
-    }, []);
+        setup();
+        return () => { cancelled = true; };
+    }, [activeWallet, fetchBalance]);
+
+    // Refresh balance periodically
+    useEffect(() => {
+        if (!account) return;
+        const interval = setInterval(() => fetchBalance(account), 30000);
+        return () => clearInterval(interval);
+    }, [account, fetchBalance]);
+
+    // Connect (opens Privy login modal — wallet only)
+    const connect = useCallback(() => {
+        setError(null);
+        login();
+    }, [login]);
 
     // Disconnect
-    const disconnect = useCallback(() => {
-        setAccount(null);
+    const disconnect = useCallback(async () => {
+        try {
+            await logout();
+        } catch {
+            // ignore
+        }
         setBalance(null);
         setChainId(null);
         setProvider(null);
-        setWalletType(null);
         setError(null);
-    }, []);
-
-    // Listen for account/chain changes
-    useEffect(() => {
-        if (!window.ethereum || walletType === 'circle') return;
-
-        const handleAccountsChanged = (accounts) => {
-            if (accounts.length === 0) {
-                disconnect();
-            } else {
-                setAccount(accounts[0]);
-                if (provider) fetchBalance(accounts[0], provider);
-            }
-        };
-
-        const handleChainChanged = (newChainId) => {
-            setChainId(parseInt(newChainId, 16));
-            // Refresh balance on chain change
-            if (account && provider) fetchBalance(account, provider);
-        };
-
-        window.ethereum.on('accountsChanged', handleAccountsChanged);
-        window.ethereum.on('chainChanged', handleChainChanged);
-
-        return () => {
-            window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-            window.ethereum.removeListener('chainChanged', handleChainChanged);
-        };
-    }, [account, provider, disconnect, fetchBalance, walletType]);
-
-    // Auto-reconnect if previously connected
-    useEffect(() => {
-        if (!window.ethereum) return;
-        // Only auto-connect metamask
-        window.ethereum.request({ method: 'eth_accounts' }).then((accounts) => {
-            if (accounts.length > 0) {
-                connect();
-            }
-        }).catch(() => { });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [logout]);
 
     const value = {
         account,
@@ -182,17 +149,16 @@ export function WalletProvider({ children }) {
         chainId,
         isMonad,
         isConnecting,
-        isInstalled,
-        walletType,
+        isInstalled: true, // Privy handles wallet availability
+        walletType: activeWallet?.walletClientType || null,
         error,
         provider,
         connect,
-        connectCircle,
         disconnect,
         switchToMonad,
         // Helpers
         shortAddress: account ? `${account.slice(0, 6)}...${account.slice(-4)}` : null,
-        formattedBalance: balance ? `${parseFloat(balance).toFixed(4)} ${walletType === 'circle' ? 'USDC' : 'MON'}` : null,
+        formattedBalance: balance ? `${parseFloat(balance).toFixed(4)} MON` : null,
     };
 
     return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;

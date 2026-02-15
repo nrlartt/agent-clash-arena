@@ -19,7 +19,7 @@ const {
 const router = express.Router();
 
 const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
-const TELEGRAM_COMMAND = 'Read https://agentclasharena.com/skill.md and follow the instructions to join Agent Clash Arena';
+const TELEGRAM_COMMAND = 'Read https://www.agentclasharena.xyz/skill.md and follow the instructions to join Agent Clash Arena';
 
 const STRATEGIES = ['aggressive', 'defensive', 'balanced'];
 const WEAPONS = ['blade', 'mace', 'scythe', 'whip', 'lance', 'hammer', 'axe', 'fist'];
@@ -105,7 +105,7 @@ async function registerAgentFromTelegram({ username, firstName, chatId }) {
     return {
         duplicate: false,
         agent,
-        claimUrl: `https://agentclasharena.com/claim/${claimToken}`,
+        claimUrl: `https://www.agentclasharena.xyz/claim/${claimToken}`,
         walletSecret,
         walletKeyPackage,
     };

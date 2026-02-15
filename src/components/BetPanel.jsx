@@ -93,7 +93,7 @@ export default function BetPanel({ match, walletConnected = false, disabled = fa
         }
         if (!isMonad) {
             setBetStatus('error');
-            setBetMessage('Please switch to Monad Mainnet.');
+            setBetMessage('Please switch to Monad Mainnet to place bets.');
             return;
         }
 

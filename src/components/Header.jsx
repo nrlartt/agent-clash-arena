@@ -1,10 +1,10 @@
 // ═══════════════════════════════════════════════════════════════
-// HEADER — Navigation + Real Wallet Connect (MetaMask/Monad)
+// HEADER — Navigation + Privy Wallet Connect
 // ═══════════════════════════════════════════════════════════════
 
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Wallet, Menu, X, Zap, Trophy, Swords, Users, BarChart3, LogOut, AlertCircle, ExternalLink, ShoppingBag, Droplets } from 'lucide-react';
+import { Wallet, Menu, X, Zap, Trophy, Swords, Users, BarChart3, LogOut, AlertCircle, ExternalLink, ShoppingBag } from 'lucide-react';
 import { useWallet } from '../context/WalletContext';
 import './Header.css';
 
@@ -29,7 +29,6 @@ export default function Header() {
         isConnecting,
         error,
         connect,
-        connectCircle,
         disconnect,
         switchToMonad,
     } = useWallet();
@@ -75,20 +74,6 @@ export default function Header() {
                                     <AlertCircle size={14} />
                                     Wrong Network
                                 </button>
-                            )}
-
-                            {/* Buy MON — Link to exchange/bridge */}
-                            {isMonad && (
-                                <a
-                                    href="https://monadscan.com"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="header__faucet-btn"
-                                    title="View Monad Mainnet on explorer"
-                                >
-                                    <Droplets size={14} />
-                                    <span>Explorer</span>
-                                </a>
                             )}
 
                             {/* Balance */}
@@ -140,76 +125,23 @@ export default function Header() {
                             </div>
                         </div>
                     ) : (
-                        <div style={{ position: 'relative' }}>
-                            <button
-                                className="btn btn-primary header__connect-btn"
-                                onClick={() => setShowWalletDropdown(!showWalletDropdown)}
-                                disabled={isConnecting}
-                                id="connect-wallet-btn"
-                            >
-                                {isConnecting ? (
-                                    <>
-                                        <span className="spinner" /> Connecting...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Wallet size={16} />
-                                        Connect Wallet
-                                    </>
-                                )}
-                            </button>
-
-                            {/* Wallet Selection Dropdown */}
-                            {showWalletDropdown && !account && (
-                                <div className="header__wallet-dropdown header__wallet-dropdown--connect">
-                                    <div className="header__dropdown-title">Select Wallet</div>
-                                    <button
-                                        className="header__connect-option"
-                                        onClick={() => { connect(); setShowWalletDropdown(false); }}
-                                    >
-                                        <img src="https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg" alt="MetaMask" width={24} />
-                                        <div>
-                                            <div className="header__option-name">MetaMask</div>
-                                            <div className="header__option-sub">Browser Extension</div>
-                                        </div>
-                                    </button>
-                                    <button
-                                        className="header__connect-option"
-                                        onClick={async () => {
-                                            if (!import.meta.env.VITE_CIRCLE_APP_ID || !import.meta.env.VITE_GOOGLE_CLIENT_ID) {
-                                                alert("Circle App ID or Google Client ID not configured. Check .env file.");
-                                                return;
-                                            }
-                                            setShowWalletDropdown(false);
-                                            try {
-                                                const { circleService } = await import('../services/circleService');
-                                                await circleService.setupAndLogin((err, result) => {
-                                                    if (err) {
-                                                        console.error("[Circle Login Error]", err);
-                                                        alert("Google login failed: " + (err.message || 'Unknown error'));
-                                                        return;
-                                                    }
-                                                    if (result) {
-                                                        console.log("[Circle Login Success]", result);
-                                                        // Connect via WalletContext
-                                                        connectCircle(result.address, result.balance || '0');
-                                                    }
-                                                });
-                                            } catch (e) {
-                                                console.error("[Circle SDK Error]", e);
-                                                alert("Failed to initialize Circle SDK: " + e.message);
-                                            }
-                                        }}
-                                    >
-                                        <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" alt="Google" width={24} />
-                                        <div>
-                                            <div className="header__option-name">Google Login</div>
-                                            <div className="header__option-sub">No extension needed — Powered by Circle</div>
-                                        </div>
-                                    </button>
-                                </div>
+                        <button
+                            className="btn btn-primary header__connect-btn"
+                            onClick={connect}
+                            disabled={isConnecting}
+                            id="connect-wallet-btn"
+                        >
+                            {isConnecting ? (
+                                <>
+                                    <span className="spinner" /> Loading...
+                                </>
+                            ) : (
+                                <>
+                                    <Wallet size={16} />
+                                    Connect Wallet
+                                </>
                             )}
-                        </div>
+                        </button>
                     )}
 
                     {/* Error Toast */}
