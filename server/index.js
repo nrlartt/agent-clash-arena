@@ -16,6 +16,7 @@ const logger = require('./utils/logger');
 const { initSentry, setupSentryErrorHandler } = require('./utils/sentry');
 
 const app = express();
+let buybackService = null;
 
 // Initialize Sentry (must be first)
 initSentry(app);
@@ -72,6 +73,22 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || '';
+
+function requireAdmin(req, res, next) {
+    if (!ADMIN_API_KEY) {
+        if (IS_PRODUCTION) {
+            return res.status(503).json({ success: false, error: 'Admin API key is not configured' });
+        }
+        return next();
+    }
+
+    const given = req.headers['x-admin-key'];
+    if (String(given || '') !== String(ADMIN_API_KEY)) {
+        return res.status(401).json({ success: false, error: 'Unauthorized admin action' });
+    }
+    return next();
+}
 
 // ── Security Middleware ──────────────────────────────────────
 app.use(helmet({
@@ -184,6 +201,9 @@ app.get('/api/v1/stats', async (_req, res) => {
     const betStats = typeof db.getBetStats === 'function'
         ? await db.getBetStats()
         : { totalCount: 0, totalVolume: 0 };
+    const tokenomics = typeof db.getTokenomics === 'function'
+        ? await db.getTokenomics()
+        : { totals: { monSpent: 0, clashBought: 0, clashBurned: 0, runs: 0 } };
     const activeAgents = agents.filter(a => a.status !== 'pending_claim').length;
 
     res.json({
@@ -198,6 +218,10 @@ app.get('/api/v1/stats', async (_req, res) => {
             payoutTreasuryMON: platformEconomy.treasuryMON,
             totalPaidToAgentsMON: platformEconomy.totalPaidToAgents,
             totalPaidToBettorsMON: platformEconomy.totalPaidToBettors,
+            totalBuybackSpendMON: Number(tokenomics?.totals?.monSpent || 0),
+            totalClashBought: Number(tokenomics?.totals?.clashBought || 0),
+            totalClashBurned: Number(tokenomics?.totals?.clashBurned || 0),
+            totalBuybackRuns: Number(tokenomics?.totals?.runs || 0),
             onlineViewers: io.engine.clientsCount || 0,
         },
     });
@@ -230,6 +254,10 @@ app.get('/api/v1/health', async (_req, res) => {
                 network: 'Monad Mainnet',
                 operatorBalance: operatorBalance ? `${operatorBalance} MON` : null,
             },
+            buyback: {
+                enabled: !!buybackService?.enabled,
+                initialized: !!buybackService?.runtime?.initialized,
+            },
         });
     } catch (err) {
         // Even if everything fails, return 200 so healthcheck passes
@@ -246,6 +274,49 @@ app.get('/api/v1/chain/status', async (_req, res) => {
         res.json({ success: true, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message || 'Failed to read chain status' });
+    }
+});
+
+app.get('/api/v1/tokenomics', async (_req, res) => {
+    try {
+        const tokenomics = typeof db.getTokenomics === 'function'
+            ? await db.getTokenomics()
+            : null;
+        const buybackStatus = buybackService && typeof buybackService.getStatus === 'function'
+            ? await buybackService.getStatus()
+            : { enabled: false };
+
+        res.json({
+            success: true,
+            data: {
+                tokenomics: tokenomics || {
+                    totals: {
+                        runs: 0,
+                        successfulRuns: 0,
+                        failedRuns: 0,
+                        monSpent: 0,
+                        clashBought: 0,
+                        clashBurned: 0,
+                    },
+                    history: [],
+                },
+                buyback: buybackStatus,
+            },
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message || 'Failed to read tokenomics status' });
+    }
+});
+
+app.post('/api/v1/tokenomics/run-buyback', requireAdmin, async (_req, res) => {
+    try {
+        if (!buybackService || typeof buybackService.runNow !== 'function') {
+            return res.status(503).json({ success: false, error: 'Buyback service unavailable' });
+        }
+        const result = await buybackService.runNow('manual_api');
+        return res.json({ success: true, data: result });
+    } catch (err) {
+        return res.status(500).json({ success: false, error: err.message || 'Failed to run buyback' });
     }
 });
 
@@ -350,8 +421,11 @@ io.use((socket, next) => {
 
 // ── Auto Matchmaker (creates matches automatically) ──────────
 const AutoMatchmaker = require('./utils/auto-matchmaker');
+const BuybackService = require('./utils/buyback-service');
 const matchmaker = new AutoMatchmaker(io);
 app.locals.matchmaker = matchmaker;
+buybackService = new BuybackService({ db, io });
+app.locals.buybackService = buybackService;
 const BETTING_CONTRACT_ADDRESS = String(process.env.BETTING_CONTRACT_ADDRESS || process.env.VITE_BETTING_CONTRACT_ADDRESS || '').trim();
 const BETTING_RPC_URL = process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz';
 const ONCHAIN_BETTING_REQUIRED = process.env.ONCHAIN_BETTING_REQUIRED !== 'false';
@@ -657,5 +731,12 @@ server.listen(PORT, async () => {
     } catch (err) {
         logger.error('AutoMatchmaker failed to start', { error: err.message, stack: err.stack });
     }
-});
 
+    try {
+        if (buybackService) {
+            buybackService.start();
+        }
+    } catch (err) {
+        logger.error('BuybackService failed to start', { error: err.message, stack: err.stack });
+    }
+});

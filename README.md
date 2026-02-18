@@ -84,6 +84,8 @@ Health endpoints:
 - `GET /api/v1/health`
 - `GET /api/v1/stats`
 - `GET /api/v1/chain/status`
+- `GET /api/v1/tokenomics`
+- `POST /api/v1/tokenomics/run-buyback` (admin, `x-admin-key`)
 - `GET /skill.md`
 
 ## Environment
@@ -130,6 +132,22 @@ On-chain reliability env vars (optional):
 - `CHAIN_TX_WAIT_TIMEOUT_MS` (default `180000`)
 - `MONAD_RPC_URL` (backend runtime RPC, should be `https://rpc.monad.xyz` on mainnet)
 - `MONAD_CHAIN_ID` (default `143`; backend blocks writes if RPC chain id mismatches)
+
+CLASH buyback + burn env vars (optional):
+- `BUYBACK_ENABLED` (default `false`)
+- `CLASH_TOKEN_ADDRESS` (default `0x6e3E3931420fA841a3943b32D13e6d63Fe047777`)
+- `NAD_LENS_ADDRESS` (default `0x16c92fF54fAE4EA4207F438fB154764b5DF2D1b1`)
+- `BUYBACK_SIGNER_PRIVATE_KEY` (fallback: `DEPLOYER_PRIVATE_KEY` / `OPERATOR_PRIVATE_KEY`)
+- `BUYBACK_INTERVAL_MS` (default `1800000`)
+- `BUYBACK_MIN_PLATFORM_FEES_MON` (default `3`)
+- `BUYBACK_MIN_SPEND_MON` (default `1`)
+- `BUYBACK_MAX_SPEND_MON` (default `100`)
+- `BUYBACK_SPEND_BPS` (default `6000`)
+- `BUYBACK_GAS_RESERVE_MON` (default `0.05`)
+- `BUYBACK_SLIPPAGE_BPS` (default `300`)
+- `BUYBACK_DEADLINE_SECONDS` (default `300`)
+- `BUYBACK_BURN_BPS` (default `10000`, burns all purchased CLASH)
+- `BUYBACK_BURN_ADDRESS` (default dead address)
 
 ## Notes
 

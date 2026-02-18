@@ -10,8 +10,31 @@ const Agent = require('./models/Agent');
 const Match = require('./models/Match');
 const Bet = require('./models/Bet');
 const Activity = require('./models/Activity');
+const Tokenomics = require('./models/Tokenomics');
 
 const MONGODB_URI = process.env.MONGODB_URI;
+const DEFAULT_TOKENOMICS = {
+    totals: {
+        runs: 0,
+        successfulRuns: 0,
+        failedRuns: 0,
+        monSpent: 0,
+        clashBought: 0,
+        clashBurned: 0,
+    },
+    history: [],
+    lastRunAt: null,
+    lastSuccessAt: null,
+    lastError: null,
+    lastErrorAt: null,
+    lastWithdrawTxHash: null,
+    lastBuyTxHash: null,
+    lastBurnTxHash: null,
+    lastRouter: null,
+    lastSpendMON: 0,
+    lastBoughtCLASH: 0,
+    lastBurnedCLASH: 0,
+};
 
 class MongoDatabase {
     constructor() {
@@ -264,6 +287,91 @@ class MongoDatabase {
     }
 
     // ── Stats helpers (for compatibility with server/index.js) ──
+    async getTokenomics() {
+        const doc = await Tokenomics.findOne({ key: 'global' }).lean();
+        return {
+            ...DEFAULT_TOKENOMICS,
+            ...(doc || {}),
+            totals: {
+                ...DEFAULT_TOKENOMICS.totals,
+                ...(doc?.totals || {}),
+            },
+            history: Array.isArray(doc?.history) ? doc.history : [],
+        };
+    }
+
+    async updateTokenomics(updates = {}) {
+        const current = await this.getTokenomics();
+        const merged = {
+            ...current,
+            ...updates,
+            key: 'global',
+            totals: {
+                ...current.totals,
+                ...(updates.totals || {}),
+            },
+            history: Array.isArray(updates.history) ? updates.history.slice(0, 100) : current.history,
+        };
+
+        const saved = await Tokenomics.findOneAndUpdate(
+            { key: 'global' },
+            merged,
+            { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
+        ).lean();
+
+        return {
+            ...DEFAULT_TOKENOMICS,
+            ...(saved || {}),
+            totals: {
+                ...DEFAULT_TOKENOMICS.totals,
+                ...(saved?.totals || {}),
+            },
+            history: Array.isArray(saved?.history) ? saved.history : [],
+        };
+    }
+
+    async recordTokenomicsRun(run = {}) {
+        const current = await this.getTokenomics();
+        const status = run.status === 'success' ? 'success' : (run.status === 'failed' ? 'failed' : 'skipped');
+        const monSpent = Number(run.monSpentMON || 0);
+        const clashBought = Number(run.clashBought || 0);
+        const clashBurned = Number(run.clashBurned || 0);
+
+        const totals = {
+            runs: Number(current.totals.runs || 0) + 1,
+            successfulRuns: Number(current.totals.successfulRuns || 0) + (status === 'success' ? 1 : 0),
+            failedRuns: Number(current.totals.failedRuns || 0) + (status === 'failed' ? 1 : 0),
+            monSpent: Number((Number(current.totals.monSpent || 0) + monSpent).toFixed(6)),
+            clashBought: Number((Number(current.totals.clashBought || 0) + clashBought).toFixed(6)),
+            clashBurned: Number((Number(current.totals.clashBurned || 0) + clashBurned).toFixed(6)),
+        };
+
+        const history = [run, ...(Array.isArray(current.history) ? current.history : [])].slice(0, 100);
+        const updates = {
+            totals,
+            history,
+            lastRunAt: run.finishedAt || Date.now(),
+            lastWithdrawTxHash: run.withdrawTxHash || current.lastWithdrawTxHash || null,
+            lastBuyTxHash: run.buyTxHash || current.lastBuyTxHash || null,
+            lastBurnTxHash: run.burnTxHash || current.lastBurnTxHash || null,
+            lastRouter: run.router || current.lastRouter || null,
+            lastSpendMON: monSpent,
+            lastBoughtCLASH: clashBought,
+            lastBurnedCLASH: clashBurned,
+        };
+
+        if (status === 'success') {
+            updates.lastSuccessAt = run.finishedAt || Date.now();
+            updates.lastError = null;
+            updates.lastErrorAt = null;
+        } else if (status === 'failed') {
+            updates.lastError = run.error || 'Buyback run failed';
+            updates.lastErrorAt = run.finishedAt || Date.now();
+        }
+
+        return this.updateTokenomics(updates);
+    }
+
     get data() {
         // Proxy for backward compat — returns a promise-like
         return {

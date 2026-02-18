@@ -21,6 +21,28 @@ const DEFAULT_DB = {
         totalPaidToAgents: 0,
         totalPaidToBettors: 0,
     },
+    tokenomics: {
+        totals: {
+            runs: 0,
+            successfulRuns: 0,
+            failedRuns: 0,
+            monSpent: 0,
+            clashBought: 0,
+            clashBurned: 0,
+        },
+        history: [],
+        lastRunAt: null,
+        lastSuccessAt: null,
+        lastError: null,
+        lastErrorAt: null,
+        lastWithdrawTxHash: null,
+        lastBuyTxHash: null,
+        lastBurnTxHash: null,
+        lastRouter: null,
+        lastSpendMON: 0,
+        lastBoughtCLASH: 0,
+        lastBurnedCLASH: 0,
+    },
 };
 
 class JsonDatabase {
@@ -44,6 +66,15 @@ class JsonDatabase {
                     platform: {
                         ...DEFAULT_DB.platform,
                         ...(parsed.platform || {}),
+                    },
+                    tokenomics: {
+                        ...JSON.parse(JSON.stringify(DEFAULT_DB.tokenomics)),
+                        ...(parsed.tokenomics || {}),
+                        totals: {
+                            ...DEFAULT_DB.tokenomics.totals,
+                            ...(parsed.tokenomics?.totals || {}),
+                        },
+                        history: Array.isArray(parsed.tokenomics?.history) ? parsed.tokenomics.history : [],
                     },
                 };
             }
@@ -411,6 +442,79 @@ class JsonDatabase {
             ...DEFAULT_DB.platform,
             ...(this.data.platform || {}),
         };
+    }
+
+    getTokenomics() {
+        return {
+            ...JSON.parse(JSON.stringify(DEFAULT_DB.tokenomics)),
+            ...(this.data.tokenomics || {}),
+            totals: {
+                ...DEFAULT_DB.tokenomics.totals,
+                ...(this.data.tokenomics?.totals || {}),
+            },
+            history: Array.isArray(this.data.tokenomics?.history) ? this.data.tokenomics.history : [],
+        };
+    }
+
+    updateTokenomics(updates = {}) {
+        const current = this.getTokenomics();
+        const next = {
+            ...current,
+            ...updates,
+            totals: {
+                ...current.totals,
+                ...(updates.totals || {}),
+            },
+            history: Array.isArray(updates.history) ? updates.history.slice(0, 100) : current.history,
+        };
+        this.data.tokenomics = next;
+        this._save();
+        return next;
+    }
+
+    recordTokenomicsRun(run = {}) {
+        const current = this.getTokenomics();
+        const status = run.status === 'success' ? 'success' : (run.status === 'failed' ? 'failed' : 'skipped');
+        const monSpent = Number(run.monSpentMON || 0);
+        const clashBought = Number(run.clashBought || 0);
+        const clashBurned = Number(run.clashBurned || 0);
+
+        const totals = {
+            runs: Number(current.totals.runs || 0) + 1,
+            successfulRuns: Number(current.totals.successfulRuns || 0) + (status === 'success' ? 1 : 0),
+            failedRuns: Number(current.totals.failedRuns || 0) + (status === 'failed' ? 1 : 0),
+            monSpent: Number((Number(current.totals.monSpent || 0) + monSpent).toFixed(6)),
+            clashBought: Number((Number(current.totals.clashBought || 0) + clashBought).toFixed(6)),
+            clashBurned: Number((Number(current.totals.clashBurned || 0) + clashBurned).toFixed(6)),
+        };
+
+        const history = [run, ...(Array.isArray(current.history) ? current.history : [])].slice(0, 100);
+        const next = {
+            ...current,
+            totals,
+            history,
+            lastRunAt: run.finishedAt || Date.now(),
+            lastWithdrawTxHash: run.withdrawTxHash || current.lastWithdrawTxHash || null,
+            lastBuyTxHash: run.buyTxHash || current.lastBuyTxHash || null,
+            lastBurnTxHash: run.burnTxHash || current.lastBurnTxHash || null,
+            lastRouter: run.router || current.lastRouter || null,
+            lastSpendMON: monSpent,
+            lastBoughtCLASH: clashBought,
+            lastBurnedCLASH: clashBurned,
+        };
+
+        if (status === 'success') {
+            next.lastSuccessAt = run.finishedAt || Date.now();
+            next.lastError = null;
+            next.lastErrorAt = null;
+        } else if (status === 'failed') {
+            next.lastError = run.error || 'Buyback run failed';
+            next.lastErrorAt = run.finishedAt || Date.now();
+        }
+
+        this.data.tokenomics = next;
+        this._save();
+        return next;
     }
 }
 
