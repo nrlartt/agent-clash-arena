@@ -73,6 +73,164 @@
     margin-bottom: var(--space-3xl);
 }
 
+/* Buyback Transparency */
+.stats-tokenomics {
+    padding: var(--space-xl);
+    margin-bottom: var(--space-2xl);
+}
+
+.stats-tokenomics__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+}
+
+.stats-tokenomics__title {
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--text-primary);
+}
+
+.stats-tokenomics__status {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border-subtle);
+}
+
+.stats-tokenomics__status.is-on {
+    color: var(--neon-green);
+    border-color: rgba(46, 204, 113, 0.5);
+    background: rgba(46, 204, 113, 0.1);
+}
+
+.stats-tokenomics__status.is-off {
+    color: var(--text-muted);
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.stats-tokenomics__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+}
+
+.stats-tokenomics__metric {
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.stats-tokenomics__metric span {
+    font-size: 0.62rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.stats-tokenomics__metric strong {
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    color: var(--text-primary);
+}
+
+.stats-tokenomics__lasttx {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    align-items: center;
+    font-size: 0.75rem;
+    margin-bottom: var(--space-md);
+}
+
+.stats-tokenomics__lasttx > span {
+    color: var(--text-muted);
+}
+
+.stats-tokenomics__lasttx a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--monad-purple-light);
+    font-family: var(--font-mono);
+}
+
+.stats-tokenomics__lasttx a:hover {
+    text-decoration: underline;
+}
+
+.stats-tokenomics__lasttx em {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+
+.stats-tokenomics__history {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.stats-tokenomics__row {
+    display: grid;
+    grid-template-columns: 96px 1fr 1fr 1fr;
+    gap: var(--space-sm);
+    align-items: center;
+    font-size: 0.72rem;
+    padding: 8px var(--space-sm);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+}
+
+.stats-tokenomics__row span {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+.stats-tokenomics__badge {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 0.62rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.08em;
+    border-radius: 999px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-subtle);
+}
+
+.stats-tokenomics__badge.is-success {
+    color: var(--neon-green);
+    border-color: rgba(46, 204, 113, 0.4);
+}
+
+.stats-tokenomics__badge.is-failed {
+    color: var(--neon-pink);
+    border-color: rgba(255, 45, 120, 0.4);
+}
+
+.stats-tokenomics__badge.is-skipped {
+    color: var(--neon-yellow);
+    border-color: rgba(255, 233, 62, 0.35);
+}
+
+.stats-tokenomics__empty {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    padding: var(--space-sm);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+}
+
 .stats-card {
     padding: var(--space-xl);
     display: flex;
@@ -514,5 +672,10 @@
 
     .stats-recent__item {
         font-size: 0.75rem;
+    }
+
+    .stats-tokenomics__row {
+        grid-template-columns: 1fr;
+        gap: 6px;
     }
 }

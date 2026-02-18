@@ -18,6 +18,7 @@ const CONTRACT_ADDRESS = import.meta.env.VITE_BETTING_CONTRACT_ADDRESS || '0xad5
 export default function Stats() {
     const [liveStats, setLiveStats] = useState(null);
     const [contractStats, setContractStats] = useState(null);
+    const [tokenomicsData, setTokenomicsData] = useState(null);
     const [agents, setAgents] = useState([]);
     const [recentResults, setRecentResults] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -26,15 +27,17 @@ export default function Stats() {
     const fetchAll = useCallback(async () => {
         setLoading(true);
         try {
-            const [statsRes, agentsRes, resultsRes] = await Promise.all([
+            const [statsRes, agentsRes, resultsRes, tokenomicsRes] = await Promise.all([
                 fetch(`${API_URL}/arena/live-stats`).then(r => r.json()).catch(() => null),
                 fetch(`${API_URL}/agents`).then(r => r.json()).catch(() => null),
                 fetch(`${API_URL}/arena/recent-results`).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/tokenomics`).then(r => r.json()).catch(() => null),
             ]);
 
             if (statsRes?.success && statsRes.data) setLiveStats(statsRes.data);
             if (agentsRes?.success && Array.isArray(agentsRes.data)) setAgents(agentsRes.data);
             if (resultsRes?.success && Array.isArray(resultsRes.data)) setRecentResults(resultsRes.data);
+            if (tokenomicsRes?.success && tokenomicsRes.data) setTokenomicsData(tokenomicsRes.data);
 
             // Fetch on-chain contract stats via read-only RPC
             try {
@@ -97,6 +100,25 @@ export default function Stats() {
         .filter(a => a.stats?.wins > 0 || a.wins > 0)
         .sort((a, b) => (b.stats?.wins || b.wins || 0) - (a.stats?.wins || a.wins || 0))
         .slice(0, 5);
+    const tokenomics = tokenomicsData?.tokenomics || {
+        totals: {
+            runs: 0,
+            successfulRuns: 0,
+            failedRuns: 0,
+            monSpent: 0,
+            clashBought: 0,
+            clashBurned: 0,
+        },
+        history: [],
+    };
+    const buyback = tokenomicsData?.buyback || { enabled: false, initialized: false };
+    const tokenomicsHistory = Array.isArray(tokenomics.history) ? tokenomics.history.slice(0, 8) : [];
+    const successRate = tokenomics.totals?.runs > 0
+        ? ((Number(tokenomics.totals.successfulRuns || 0) / Number(tokenomics.totals.runs || 1)) * 100).toFixed(1)
+        : '0.0';
+
+    const txBase = String(MONAD_CONFIG.blockExplorer || 'https://monadscan.com').replace(/\/+$/, '');
+    const txLink = (hash) => hash ? `${txBase}/tx/${hash}` : null;
 
     const platformCards = [
         {
@@ -195,6 +217,80 @@ export default function Stats() {
                             </div>
                         </div>
                     ))}
+                </div>
+
+                {/* Buyback & Burn Transparency */}
+                <div className="stats-tokenomics glass-card" id="buyback-transparency">
+                    <div className="stats-tokenomics__header">
+                        <h3 className="stats-tokenomics__title text-display">
+                            <TrendingUp size={18} style={{ color: 'var(--neon-orange)' }} />
+                            Buyback & Burn Transparency
+                        </h3>
+                        <div className={`stats-tokenomics__status ${buyback.enabled ? 'is-on' : 'is-off'}`}>
+                            {buyback.enabled ? 'Enabled' : 'Disabled'}
+                        </div>
+                    </div>
+
+                    <div className="stats-tokenomics__grid">
+                        <div className="stats-tokenomics__metric">
+                            <span>Total Buyback Spend</span>
+                            <strong>{Number(tokenomics.totals?.monSpent || 0).toFixed(4)} MON</strong>
+                        </div>
+                        <div className="stats-tokenomics__metric">
+                            <span>Total CLASH Bought</span>
+                            <strong>{Number(tokenomics.totals?.clashBought || 0).toFixed(4)} CLASH</strong>
+                        </div>
+                        <div className="stats-tokenomics__metric">
+                            <span>Total CLASH Burned</span>
+                            <strong>{Number(tokenomics.totals?.clashBurned || 0).toFixed(4)} CLASH</strong>
+                        </div>
+                        <div className="stats-tokenomics__metric">
+                            <span>Runs / Success</span>
+                            <strong>{Number(tokenomics.totals?.runs || 0)} / {successRate}%</strong>
+                        </div>
+                    </div>
+
+                    <div className="stats-tokenomics__lasttx">
+                        <span>Latest transactions:</span>
+                        {tokenomics.lastBuyTxHash ? (
+                            <>
+                                {tokenomics.lastWithdrawTxHash && (
+                                    <a href={txLink(tokenomics.lastWithdrawTxHash)} target="_blank" rel="noopener noreferrer">
+                                        Withdraw <ExternalLink size={11} />
+                                    </a>
+                                )}
+                                {tokenomics.lastBuyTxHash && (
+                                    <a href={txLink(tokenomics.lastBuyTxHash)} target="_blank" rel="noopener noreferrer">
+                                        Buy <ExternalLink size={11} />
+                                    </a>
+                                )}
+                                {tokenomics.lastBurnTxHash && (
+                                    <a href={txLink(tokenomics.lastBurnTxHash)} target="_blank" rel="noopener noreferrer">
+                                        Burn <ExternalLink size={11} />
+                                    </a>
+                                )}
+                            </>
+                        ) : (
+                            <em>No buyback transactions yet.</em>
+                        )}
+                    </div>
+
+                    <div className="stats-tokenomics__history">
+                        {tokenomicsHistory.length > 0 ? tokenomicsHistory.map((run) => (
+                            <div className="stats-tokenomics__row" key={run.id || run.startedAt}>
+                                <span className={`stats-tokenomics__badge is-${run.status || 'unknown'}`}>
+                                    {String(run.status || 'unknown').toUpperCase()}
+                                </span>
+                                <span>{Number(run.monSpentMON || 0).toFixed(4)} MON</span>
+                                <span>{Number(run.clashBurned || 0).toFixed(4)} CLASH burned</span>
+                                <span>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : '-'}</span>
+                            </div>
+                        )) : (
+                            <div className="stats-tokenomics__empty">
+                                Buyback history will appear here after first successful run.
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Top Agents Leaderboard */}
